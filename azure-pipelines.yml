@@ -64,15 +64,13 @@ steps:
       provisioningProfileUuid: '$(APPLE_PROV_PROFILE_UUID)'
     displayName: 'Build iOS app'
 
-  - task: AppStoreRelease@1
-    inputs:
-      serviceEndpoint: 'App Store Connect'
-      appIdentifier: 'com.nelit.project101104'
-      ipaPath: '$(Build.ArtifactStagingDirectory)/*.ipa'
-      shouldSkipWaitingForProcessing: true
-      shouldSkipSubmission: true
-      releaseTrack: 'TestFlight'
-    displayName: 'Publish to TestFlight'
+  - script: |
+      xcrun altool --upload-app \
+        --type ios \
+        --file $(Build.ArtifactStagingDirectory)/*.ipa \
+        --apiKey $(APP_STORE_API_KEY_ID) \
+        --apiIssuer $(APP_STORE_API_ISSUER_ID)
+    displayName: 'Upload to TestFlight'
     condition: succeeded()
 
   - task: PublishBuildArtifacts@1
