@@ -1,0 +1,15 @@
+{
+  "name": "101-104 Nelit",
+  "short_name": "Nelit",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "description": "Route builder + locations app",
+  "icons": [
+    {
+      "src": "/image.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

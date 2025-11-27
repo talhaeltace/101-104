@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* safe area helpers for iOS notch and Android status bar */
+:root{
+	--safe-area-inset-top: env(safe-area-inset-top, 0px);
+}
+
+body {
+	padding-top: var(--safe-area-inset-top);
+}
+
+.app-header {
+	padding-top: calc(var(--safe-area-inset-top) + 8px);
+}
+
+.main-content {
+	margin-top: calc(56px + var(--safe-area-inset-top));
+}
+
+/* Responsive map container that uses the --vh variable (fixes clipping on mobile rotation) */
+.map-responsive {
+	height: calc(var(--vh, 1vh) * 40);
+}
+@media (min-width: 640px) {
+	.map-responsive { height: calc(var(--vh, 1vh) * 60); }
+}
+@media (min-width: 768px) {
+	.map-responsive { height: calc(var(--vh, 1vh) * 70); }
+}
+@media (min-width: 1024px) {
+	.map-responsive { height: calc(var(--vh, 1vh) * 90); }
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">101-104 Follow</string>
+    <string name="title_activity_main">101-104 Follow</string>
+    <string name="package_name">com.nelit.project101104</string>
+    <string name="custom_url_scheme">com.nelit.project101104</string>
+</resources>

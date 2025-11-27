@@ -1,0 +1,19 @@
+<!--
+  Info.plist snippet for iOS location permissions
+  Copy the <key>...</key><string>...</string> entries into your ios/App/App/Info.plist
+  (or add them in Xcode's Info editor).
+-->
+
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>Uygulama, rotanızı oluşturmak ve mevcut konumunuzu almak için konumunuza ihtiyaç duyar.</string>
+
+<!-- If you need background location, enable Background Modes in Xcode and add the following -->
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+<string>Uygulama arka planda rota takibi için konum izni isteyebilir.</string>
+
+<!-- Optional: small dev-time exception for non-HTTPS dev server (do not use in production) -->
+<key>NSAppTransportSecurity</key>
+<dict>
+  <key>NSAllowsArbitraryLoads</key>
+  <true/>
+</dict>
