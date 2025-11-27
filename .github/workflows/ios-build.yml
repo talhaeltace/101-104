@@ -48,29 +48,7 @@ jobs:
         security list-keychain -d user -s $KEYCHAIN_PATH
 
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-        
-        # Get UUID from provisioning profile
-        PP_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< $(/usr/bin/security cms -D -i $PP_PATH))
-        echo "Provisioning Profile UUID: $PP_UUID"
-        cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/$PP_UUID.mobileprovision
-        
-        # Configure Xcode project for manual signing
-        PROJECT_FILE="ios/App/App.xcodeproj/project.pbxproj"
-        
-        # Change CODE_SIGN_STYLE from Automatic to Manual
-        sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PROJECT_FILE"
-        
-        # Add DEVELOPMENT_TEAM after CODE_SIGN_STYLE lines
-        sed -i '' '/CODE_SIGN_STYLE = Manual;/a\
-				DEVELOPMENT_TEAM = 5ZPALS9CL3;
-' "$PROJECT_FILE"
-        
-        # Add PROVISIONING_PROFILE_SPECIFIER after DEVELOPMENT_TEAM lines
-        sed -i '' '/DEVELOPMENT_TEAM = 5ZPALS9CL3;/a\
-				PROVISIONING_PROFILE_SPECIFIER = "'"$PP_UUID"'";
-' "$PROJECT_FILE"
-        
-        echo "Project file updated with signing configuration"
+        cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/101104_App_Store.mobileprovision
     
     - name: Build iOS
       run: |
