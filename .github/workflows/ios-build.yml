@@ -70,10 +70,10 @@ jobs:
           -sdk iphoneos \
           -configuration Release \
           -archivePath $RUNNER_TEMP/App.xcarchive \
+          archive \
           DEVELOPMENT_TEAM=5ZPALS9CL3 \
           CODE_SIGN_STYLE=Manual \
-          PROVISIONING_PROFILE_SPECIFIER=$PP_UUID \
-          archive
+          PROVISIONING_PROFILE_SPECIFIER="$PP_UUID"
         
         xcodebuild -exportArchive \
           -archivePath $RUNNER_TEMP/App.xcarchive \
