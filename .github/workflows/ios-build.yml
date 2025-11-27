@@ -60,10 +60,18 @@ jobs:
     
     - name: Build iOS
       run: |
-        # Get provisioning profile UUID
-        PP_UUID=$(grep -a -A 1 'UUID' ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | grep string | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+        # List provisioning profiles
+        ls -la ~/Library/MobileDevice/Provisioning\ Profiles/
         
-        echo "Provisioning Profile UUID: $PP_UUID"
+        # Get provisioning profile UUID
+        PP_UUID=$(grep -a -A 1 'UUID' ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | grep string | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+        
+        echo "Provisioning Profile UUID: [$PP_UUID]"
+        
+        if [ -z "$PP_UUID" ]; then
+          echo "ERROR: Could not find provisioning profile UUID"
+          exit 1
+        fi
         
         xcodebuild -workspace ios/App/App.xcworkspace \
           -scheme App \
@@ -71,9 +79,10 @@ jobs:
           -configuration Release \
           -archivePath $RUNNER_TEMP/App.xcarchive \
           archive \
-          DEVELOPMENT_TEAM=5ZPALS9CL3 \
-          CODE_SIGN_STYLE=Manual \
-          PROVISIONING_PROFILE_SPECIFIER="$PP_UUID"
+          DEVELOPMENT_TEAM="5ZPALS9CL3" \
+          CODE_SIGN_STYLE="Manual" \
+          PROVISIONING_PROFILE_SPECIFIER="$PP_UUID" \
+          CODE_SIGN_IDENTITY="Apple Distribution"
         
         xcodebuild -exportArchive \
           -archivePath $RUNNER_TEMP/App.xcarchive \
