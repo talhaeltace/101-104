@@ -60,11 +60,19 @@ jobs:
     
     - name: Build iOS
       run: |
+        # Get provisioning profile UUID
+        PP_UUID=$(grep -a -A 1 'UUID' ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | grep string | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+        
+        echo "Provisioning Profile UUID: $PP_UUID"
+        
         xcodebuild -workspace ios/App/App.xcworkspace \
           -scheme App \
           -sdk iphoneos \
           -configuration Release \
           -archivePath $RUNNER_TEMP/App.xcarchive \
+          DEVELOPMENT_TEAM=5ZPALS9CL3 \
+          CODE_SIGN_STYLE=Manual \
+          PROVISIONING_PROFILE_SPECIFIER=$PP_UUID \
           archive
         
         xcodebuild -exportArchive \
