@@ -35,7 +35,7 @@ steps:
 
   - task: InstallAppleCertificate@2
     inputs:
-      certSecureFile: 'ios_distribution.p12'
+      certSecureFile: '101_104_distribution.p12'
       certPwd: '$(P12_PASSWORD)'
       keychain: 'temp'
     displayName: 'Install Apple Certificate'
@@ -43,7 +43,7 @@ steps:
   - task: InstallAppleProvisioningProfile@1
     inputs:
       provisioningProfileLocation: 'secureFiles'
-      provProfileSecureFile: '101-104_App_Store.mobileprovision'
+      provProfileSecureFile: '101104_App_Store.mobileprovision'
     displayName: 'Install Provisioning Profile'
 
   - task: Xcode@5
