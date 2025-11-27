@@ -1,0 +1,82 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'macOS-latest'
+
+variables:
+  - group: ios-signing
+  - name: scheme
+    value: 'App'
+  - name: sdk
+    value: 'iphoneos'
+  - name: configuration
+    value: 'Release'
+
+steps:
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '20.x'
+    displayName: 'Install Node.js'
+
+  - script: |
+      npm install
+    displayName: 'Install dependencies'
+
+  - script: |
+      npm run build
+    displayName: 'Build web assets'
+
+  - script: |
+      npx cap sync ios
+    displayName: 'Sync Capacitor'
+
+  - task: InstallAppleCertificate@2
+    inputs:
+      certSecureFile: 'ios_distribution.p12'
+      certPwd: '$(P12_PASSWORD)'
+      keychain: 'temp'
+    displayName: 'Install Apple Certificate'
+
+  - task: InstallAppleProvisioningProfile@1
+    inputs:
+      provisioningProfileLocation: 'secureFiles'
+      provProfileSecureFile: '101-104_App_Store.mobileprovision'
+    displayName: 'Install Provisioning Profile'
+
+  - task: Xcode@5
+    inputs:
+      actions: 'archive'
+      scheme: '$(scheme)'
+      sdk: '$(sdk)'
+      configuration: '$(configuration)'
+      xcWorkspacePath: 'ios/App/App.xcworkspace'
+      xcodeVersion: 'default'
+      packageApp: true
+      archivePath: '$(Build.ArtifactStagingDirectory)/App.xcarchive'
+      exportPath: '$(Build.ArtifactStagingDirectory)'
+      exportOptions: 'plist'
+      exportOptionsPlist: 'ios/App/exportOptions.plist'
+      signingOption: 'manual'
+      signingIdentity: '$(APPLE_CERTIFICATE_SIGNING_IDENTITY)'
+      provisioningProfileUuid: '$(APPLE_PROV_PROFILE_UUID)'
+    displayName: 'Build iOS app'
+
+  - task: AppStoreRelease@1
+    inputs:
+      serviceEndpoint: 'App Store Connect'
+      appIdentifier: 'com.nelit.project101104'
+      ipaPath: '$(Build.ArtifactStagingDirectory)/*.ipa'
+      shouldSkipWaitingForProcessing: true
+      shouldSkipSubmission: true
+      releaseTrack: 'TestFlight'
+    displayName: 'Publish to TestFlight'
+    condition: succeeded()
+
+  - task: PublishBuildArtifacts@1
+    inputs:
+      PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+      ArtifactName: 'ios-build'
+    displayName: 'Publish Artifacts'
