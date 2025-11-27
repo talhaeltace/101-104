@@ -9,7 +9,7 @@ workflows:
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
-        BUNDLE_ID: "com.nelit.app101104"
+        BUNDLE_ID: "com.nelit.project101104"
       node: 20
       xcode: latest
       cocoapods: default
@@ -29,13 +29,15 @@ workflows:
             -scheme "$XCODE_SCHEME" \
             -configuration Release \
             -archivePath build/ios/App.xcarchive \
+            -allowProvisioningUpdates \
             archive \
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM=$APP_STORE_CONNECT_TEAM_ID
           xcodebuild -exportArchive \
             -archivePath build/ios/App.xcarchive \
             -exportPath build/ios/ipa \
-            -exportOptionsPlist ios/App/exportOptions.plist
+            -exportOptionsPlist ios/App/exportOptions.plist \
+            -allowProvisioningUpdates
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
