@@ -48,7 +48,15 @@ jobs:
         security list-keychain -d user -s $KEYCHAIN_PATH
 
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-        cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+        
+        # Get UUID from provisioning profile
+        PP_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< $(/usr/bin/security cms -D -i $PP_PATH))
+        cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/$PP_UUID.mobileprovision
+        
+        # Configure Xcode project with Team ID and Provisioning Profile
+        sed -i '' 's/DEVELOPMENT_TEAM = ""/DEVELOPMENT_TEAM = 5ZPALS9CL3/g' ios/App/App.xcodeproj/project.pbxproj
+        sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' ios/App/App.xcodeproj/project.pbxproj
+        sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \"\"/PROVISIONING_PROFILE_SPECIFIER = $PP_UUID/g" ios/App/App.xcodeproj/project.pbxproj
     
     - name: Build iOS
       run: |
