@@ -2,8 +2,33 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>method</key>
-    <string>app-store</string>
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+        <key>method</key>
+        <string>app-store-connect</string>
+
+        <key>signingStyle</key>
+        <string>manual</string>
+
+        <key>teamID</key>
+        <string>5ZPZLS9CL3</string>
+
+        <key>provisioningProfiles</key>
+        <dict>
+            <key>com.nelit.project101104</key>
+            <string>101104_App_Store</string>
+        </dict>
+
+        <key>uploadBitcode</key>
+        <false/>
+        <key>compileBitcode</key>
+        <false/>
+        <key>uploadSymbols</key>
+        <true/>
+    </dict>
+    </plist>
     <key>uploadSymbols</key>
     <true/>
     <key>uploadBitcode</key>
