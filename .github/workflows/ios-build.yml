@@ -60,19 +60,27 @@ jobs:
     
     - name: Build iOS
       run: |
-        # List provisioning profiles
-        ls -la ~/Library/MobileDevice/Provisioning\ Profiles/
+        echo "=== Listing provisioning profiles ==="
+        ls -la ~/Library/MobileDevice/Provisioning\ Profiles/ || echo "Directory not found"
         
-        # Get provisioning profile UUID
-        PP_UUID=$(grep -a -A 1 'UUID' ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | grep string | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+        echo "=== Extracting UUID ==="
+        PP_UUID=$(grep -a -A 1 'UUID' ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision 2>/dev/null | grep string | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
         
         echo "Provisioning Profile UUID: [$PP_UUID]"
         
         if [ -z "$PP_UUID" ]; then
           echo "ERROR: Could not find provisioning profile UUID"
+          echo "Trying alternative method..."
+          PP_UUID=$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision 2>/dev/null | grep -A 1 UUID | grep string | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+          echo "UUID from alternative method: [$PP_UUID]"
+        fi
+        
+        if [ -z "$PP_UUID" ]; then
+          echo "ERROR: Still no UUID found"
           exit 1
         fi
         
+        echo "=== Starting xcodebuild ==="
         xcodebuild -workspace ios/App/App.xcworkspace \
           -scheme App \
           -sdk iphoneos \
