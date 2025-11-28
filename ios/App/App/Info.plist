@@ -22,6 +22,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Yakınınızdaki lokasyonları ve rotanızı gösterebilmek için konumunuza ihtiyacımız var.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Uygulama açıkken ve arka planda rotanızı takip edip lokasyonlara ulaştığınızı kaydedebilmek için konumunuza ihtiyacımız var.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
