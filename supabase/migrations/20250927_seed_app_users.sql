@@ -27,12 +27,10 @@ CREATE TABLE app_users (
 INSERT INTO app_users (username, password_hash, role)
 VALUES
   ('admin', crypt('Nelit1071', gen_salt('bf')), 'admin'),
-  ('hasan.huseyin',  crypt('42726', gen_salt('bf')), 'editor'),
-  ('soner.delibas',  crypt('20Passw0rd25.!', gen_salt('bf')), 'editor'),
+  ('hasan.huseyin',  crypt('42726', gen_salt('bf')), 'admin'),
   ('oguzhan.ozmen',  crypt('20Passw0rd25.!', gen_salt('bf')), 'editor'),
-  ('muhammet.can',  crypt('20Passw0rd25.!', gen_salt('bf')), 'editor'),
   ('mehmet.varol',  crypt('20Passw0rd25.!', gen_salt('bf')), 'editor'),
-  ('user',  crypt('20Passw0rd25.!', gen_salt('bf')), 'user');
+  ('user',  crypt('user', gen_salt('bf')), 'user');
 
 -- recreate the authenticate RPC (clear aliasing to avoid ambiguity)
 CREATE OR REPLACE FUNCTION authenticate_app_user(p_username text, p_password text)

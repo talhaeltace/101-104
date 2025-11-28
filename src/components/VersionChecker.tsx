@@ -76,7 +76,7 @@ export const VersionChecker = () => {
 
       reader.onloadend = async () => {
         try {
-          const base64Data = (reader.result as string).split(',')[1];
+          const base64Data = (reader.result as string).split(',')[1];   
           
           // Save to Downloads folder
           const fileName = `app-update-v${newVersion.version_name}.apk`;
