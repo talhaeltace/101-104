@@ -851,9 +851,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      // position label near cursor
-      labelEl.style.left = `${(e.clientX + 12)}px`;
-      labelEl.style.top = `${(e.clientY + 12)}px`;
+      // position label near cursor, adjusted for page scroll so it stays
+      // close to the mouse even when the page is scrolled
+      const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+      labelEl.style.left = `${e.clientX + 12}px`;
+      labelEl.style.top = `${e.clientY + scrollY + 12}px`;
     };
 
     // Tüm bölgelerden mouse çıkınca eski haline döndür

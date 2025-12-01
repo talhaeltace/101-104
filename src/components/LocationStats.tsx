@@ -1,5 +1,5 @@
 import React from 'react';
-import { MapPin, Zap, Database, Activity, CreditCard } from 'lucide-react';
+import { MapPin, Zap, Database, Activity, CreditCard, CheckCircle2, TrendingUp } from 'lucide-react';
 import { Location } from '../data/regions';
 
 interface LocationStatsProps {
@@ -13,17 +13,14 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
   const configuredCount = locations.filter(loc => loc.details.isConfigured).length;
   const installedCount = locations.filter(loc => !!loc.details.isInstalled).length;
   const cardAccessCount = locations.filter(loc => !!loc.details.hasCardAccess).length;
-  // gpsCount and rtuCount removed: replaced by 'Tamamlanacak' and 'Devreye Alınmış' stats
-  // panosCount not used in stats currently
-
+  const acceptedCount = locations.filter(loc => !!loc.details.isAccepted).length;
   
   // Seçili bölge için istatistikler
   const selectedActiveCount = selectedRegionLocations.filter(loc => loc.details.isActive).length;
   const selectedConfiguredCount = selectedRegionLocations.filter(loc => loc.details.isConfigured).length;
   const selectedInstalledCount = selectedRegionLocations.filter(loc => !!loc.details.isInstalled).length;
   const selectedCardAccessCount = selectedRegionLocations.filter(loc => !!loc.details.hasCardAccess).length;
-  // selectedGpsCount and selectedRtuCount removed for same reason
-  // selectedPanosCount not used in stats currently
+  const selectedAcceptedCount = selectedRegionLocations.filter(loc => !!loc.details.isAccepted).length;
 
   const stats = [
     {
@@ -31,87 +28,161 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: locations.length,
       selectedValue: selectedRegionLocations.length,
       icon: MapPin,
-      color: 'bg-blue-500'
+      color: 'bg-blue-500',
+      textColor: 'text-blue-600',
+      showPercentage: false
     },
-    
+    {
+      label: 'Kabulü Yapılanlar',
+      value: acceptedCount,
+      selectedValue: selectedAcceptedCount,
+      icon: CheckCircle2,
+      color: 'bg-emerald-500',
+      textColor: 'text-emerald-600',
+      showPercentage: true
+    },
     {
       label: 'Montajı Yapıldı (Firewall)',
       value: installedCount,
       selectedValue: selectedInstalledCount,
       icon: Zap,
-      color: 'bg-indigo-500'
+      color: 'bg-indigo-500',
+      textColor: 'text-indigo-600',
+      showPercentage: true
     },
     {
       label: 'Devreye Alınmış (Firewall)',
       value: activeCount,
       selectedValue: selectedActiveCount,
       icon: Database,
-      color: 'bg-green-500'
+      color: 'bg-green-500',
+      textColor: 'text-green-600',
+      showPercentage: true
     },
     {
       label: 'Konfigüre Edildi',
       value: configuredCount,
       selectedValue: selectedConfiguredCount,
       icon: Activity,
-      color: 'bg-yellow-600'
+      color: 'bg-amber-500',
+      textColor: 'text-amber-600',
+      showPercentage: true
     },
     {
       label: 'Kartlı Geçiş',
       value: cardAccessCount,
       selectedValue: selectedCardAccessCount,
       icon: CreditCard,
-      color: 'bg-purple-500'
+      color: 'bg-purple-500',
+      textColor: 'text-purple-600',
+      showPercentage: true
     },
     {
       label: 'Montajı Yapılmış (Kartlı geçiş)',
       value: locations.filter(loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess).length,
       selectedValue: selectedRegionLocations.filter(loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess).length,
       icon: CreditCard,
-      color: 'bg-teal-500'
+      color: 'bg-teal-500',
+      textColor: 'text-teal-600',
+      showPercentage: true
     },
     {
       label: 'Devreye Alınmış (Kartlı geçiş)',
       value: locations.filter(loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess).length,
       selectedValue: selectedRegionLocations.filter(loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess).length,
-      icon: CreditCard,
-      color: 'bg-emerald-500'
+      icon: TrendingUp,
+      color: 'bg-cyan-500',
+      textColor: 'text-cyan-600',
+      showPercentage: true
     },
     {
       label: 'Tamamlanacak',
-      // 'Tamamlanacak' = locations that are NOT yet devreye alınmış (not active)
       value: locations.length - activeCount,
       selectedValue: selectedRegionLocations.length - selectedActiveCount,
       icon: Zap,
-      color: 'bg-orange-500'
+      color: 'bg-orange-500',
+      textColor: 'text-orange-600',
+      showPercentage: true
     }
   ];
 
+  // Yüzde hesaplama
+  const getPercentage = (value: number, total: number) => {
+    if (total === 0) return 0;
+    return Math.round((value / total) * 100);
+  };
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-6">
-      {stats.map((stat, index) => (
-        <div key={index} className="bg-white rounded-lg shadow-sm p-6 border border-gray-100 hover:shadow-md transition-shadow h-full flex items-stretch">
-          <div className="flex items-center w-full">
-            <div className={`${stat.color} rounded-lg p-2 flex items-center justify-center mr-4 flex-shrink-0`}>
-              <stat.icon className="w-5 h-5 text-white" />
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 mb-6">
+      {stats.map((stat, index) => {
+        const totalPercentage = getPercentage(stat.value, locations.length);
+        const selectedPercentage = getPercentage(stat.selectedValue, selectedRegionLocations.length);
+        return (
+          <div 
+            key={index} 
+            className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow"
+          >
+            {/* Üst kısım - İkon ve Seçili Bölge */}
+            <div className="flex items-start justify-between mb-4">
+              <div className={`w-10 h-10 rounded-lg ${stat.color} flex items-center justify-center`}>
+                <stat.icon className="w-5 h-5 text-white" strokeWidth={2} />
+              </div>
+              
+              <div className="text-right">
+                <div className={`text-xl font-bold ${stat.textColor}`}>
+                  {stat.selectedValue}
+                </div>
+                <div className="text-xs text-gray-400">Seçili Bölge</div>
+              </div>
             </div>
-            <div className="flex-1">
-              <div className="flex items-center justify-between">
+            
+            {/* Ana değer */}
+            <div className="mb-3">
+              <div className="text-4xl font-bold text-gray-900">
+                {stat.value}
+              </div>
+              <div className="text-xs text-gray-400 mt-0.5">Toplam</div>
+            </div>
+            
+            {/* Etiket */}
+            <div className="text-sm font-medium text-gray-700 mb-3">
+              {stat.label}
+            </div>
+            
+            {/* Yüzde Bar - Toplam */}
+            {stat.showPercentage && (
+              <div className="space-y-2">
                 <div>
-                  <div className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-gray-900 leading-tight">{stat.value}</div>
-                  <div className="text-sm text-gray-500 mt-1">Toplam</div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-500">Toplam</span>
+                    <span className="font-medium text-gray-700">%{totalPercentage}</span>
+                  </div>
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full ${stat.color} rounded-full transition-all duration-500`}
+                      style={{ width: `${totalPercentage}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-xl sm:text-2xl text-gray-500">{stat.selectedValue}</div>
-                  <div className="text-sm text-gray-400">Seçili Bölge</div>
+                
+                {/* Yüzde Bar - Seçili Bölge */}
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-500">Seçili Bölge</span>
+                    <span className={`font-medium ${stat.textColor}`}>%{selectedPercentage}</span>
+                  </div>
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full ${stat.color} opacity-60 rounded-full transition-all duration-500`}
+                      style={{ width: `${selectedPercentage}%` }}
+                    />
+                  </div>
                 </div>
               </div>
-              <div className="mt-4">
-                <div className="text-base sm:text-lg font-semibold text-gray-700">{stat.label}</div>
-              </div>
-            </div>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };

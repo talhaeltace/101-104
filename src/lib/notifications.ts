@@ -50,15 +50,15 @@ export const sendNotification = (title: string, options?: NotificationOptions): 
 
 // Location-specific notifications
 export const notifyNearLocation = (locationName: string): void => {
-  sendNotification('📍 Lokasyona Yaklaştınız!', {
-    body: `${locationName} lokasyonuna 100m içinde yaklaştınız. "Adrese Vardım" butonunu kullanabilirsiniz.`,
+  sendNotification('📍 Rota Uyarısı: 100m Kaldı', {
+    body: `Seçili rota kapsamında ${locationName} lokasyonuna yaklaşık 100m kaldı. Saha personeli adrese geldiğinde "Adrese Vardım" kaydırma alanını kullanarak varışını işaretleyebilir.`,
     tag: 'location-near'
   });
 };
 
 export const notifyArrival = (locationName: string): void => {
   sendNotification('✅ Varış Kaydedildi', {
-    body: `${locationName} lokasyonuna varışınız kaydedildi. Süre tutmaya başlandı.`,
+    body: `Saha personeli ${locationName} lokasyonuna varışını "Adrese Vardım" olarak kaydetti. Bu nokta için çalışma süresi sayacı başlatıldı.`,
     tag: 'arrival'
   });
 };
@@ -69,14 +69,14 @@ export const notifyCompletion = (locationName: string, duration: number): void =
   const timeStr = hours > 0 ? `${hours}s ${mins}dk` : `${mins}dk`;
   
   sendNotification('🏁 İş Tamamlandı', {
-    body: `${locationName} tamamlandı. Geçen süre: ${timeStr}`,
+    body: `Saha personeli ${locationName} lokasyonundaki çalışmasını "Tamamlandı" olarak işaretledi. Bu adres için geçen toplam süre: ${timeStr}.`,
     tag: 'completion'
   });
 };
 
 export const notifyNextLocation = (locationName: string, index: number, total: number): void => {
   sendNotification('➡️ Sonraki Lokasyon', {
-    body: `Şimdi ${locationName} lokasyonuna gidebilirsiniz (${index}/${total})`,
+    body: `Rota üzerindeki sıradaki adres: ${locationName}. Genel rota sırası: ${index}/${total}.`,
     tag: 'next-location'
   });
 };
@@ -85,5 +85,14 @@ export const notifyRouteCompleted = (): void => {
   sendNotification('🎉 Rota Tamamlandı!', {
     body: 'Tüm lokasyonlar tamamlandı. Harika iş!',
     tag: 'route-complete'
+  });
+};
+
+export const notifyRouteStarted = (username: string | null, totalLocations: number): void => {
+  const userPart = username ? `Saha personeli ${username}` : 'Bir saha personeli';
+  const countPart = totalLocations > 0 ? `${totalLocations} lokasyonluk` : 'bir';
+  sendNotification('🗺️ Rota Başlatıldı', {
+    body: `${userPart} yeni bir ${countPart} rota başlattı. İlk adrese ilerliyor.`,
+    tag: 'route-started'
   });
 };

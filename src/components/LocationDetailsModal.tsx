@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Zap, Database, Cpu, FileText } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { MapPin, Zap, Database, Cpu, FileText, Navigation, X, Settings, Radio, Shield, Monitor, CreditCard, Server, Activity } from 'lucide-react';
 import NoteModal from '../components/NoteModal';
 import { Location } from '../data/regions';
 
@@ -14,8 +14,7 @@ interface Props {
 
 const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEdit, isAdmin, isEditor }) => {
   const [noteOpen, setNoteOpen] = useState(false);
-  // Build a Google Maps directions/search URL using coordinates if available,
-  // otherwise fall back to a search by address.
+  
   const mapsUrl =
     location?.coordinates && location.coordinates.length === 2 && location.coordinates[0] != null && location.coordinates[1] != null
       ? `https://www.google.com/maps/dir/?api=1&destination=${location.coordinates[0]},${location.coordinates[1]}`
@@ -24,186 +23,334 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
       : '';
   const canOpenMaps = Boolean(mapsUrl);
 
+  // Prevent body scroll when modal is open
+  useEffect(() => {
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+    }
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center p-6">
-      <div className="fixed inset-0 bg-black/40" onClick={onClose} />
+  // Status helper
+  const getStatusInfo = () => {
+    const isActive = !!location.details.isActive;
+    const isConfigured = !!location.details.isConfigured;
+    if (isActive && isConfigured) {
+      return { label: 'Aktif', color: 'bg-green-500', textColor: 'text-green-700', bgColor: 'bg-green-50', borderColor: 'border-green-200' };
+    }
+    if (isConfigured) {
+      return { label: 'Konfigüre Edildi', color: 'bg-amber-500', textColor: 'text-amber-700', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' };
+    }
+    return { label: 'Pasif', color: 'bg-red-500', textColor: 'text-red-700', bgColor: 'bg-red-50', borderColor: 'border-red-200' };
+  };
 
-      <div className="relative z-10 w-full max-w-4xl bg-white rounded-lg shadow-xl overflow-auto max-h-[90vh]">
-        <div className="flex items-center justify-between p-6 border-b">
-          <h3 className="text-lg font-semibold">Lokasyon Düzenle</h3>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button>
+  const status = getStatusInfo();
+
+  // Equipment data for cleaner rendering
+  const equipmentItems = [
+    { label: 'Güvenlik Duvarı', value: location.details.equipment.securityFirewall, icon: Shield },
+    { label: 'Ağ Anahtarı', value: location.details.equipment.networkSwitch, icon: Server },
+    { label: 'RTU Sayısı', value: location.details.equipment.rtuCount, icon: Database },
+    { label: 'GPS Kart/Anten', value: location.details.equipment.gpsCardAntenna, icon: Radio },
+    { label: 'RTU Panosu', value: location.details.equipment.rtuPanel, icon: Settings },
+    { label: 'BTP Panosu', value: location.details.equipment.btpPanel, icon: Settings },
+    { label: 'Enerji Analizörü', value: location.details.equipment.energyAnalyzer, icon: Activity },
+    { label: 'YKGC', value: location.details.equipment.ykgcCount, icon: Cpu },
+    { label: 'TEİAŞ RTU Kurulum', value: location.details.equipment.teiasRtuInstallation, icon: Settings },
+    { label: 'Dome Kamera', value: location.details.equipment.indoorDomeCamera, icon: Monitor },
+    { label: 'Video Yönetim', value: location.details.equipment.networkVideoManagement, icon: Monitor },
+    { label: 'Akıllı Kontrol', value: location.details.equipment.smartControlUnit, icon: Cpu },
+    { label: 'Kart Okuyucu', value: location.details.equipment.cardReader, icon: CreditCard },
+    { label: 'Kayıt Ünitesi', value: location.details.equipment.networkRecordingUnit, icon: Server },
+    { label: 'Geçiş Kontrol', value: location.details.equipment.accessControlSystem, icon: Shield },
+  ];
+
+  return (
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onWheel={(e) => e.stopPropagation()}
+    >
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+
+      {/* Modal */}
+      <div 
+        className="relative z-10 w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+        onWheel={(e) => e.stopPropagation()}
+      >
+        
+        {/* Header */}
+        <div className={`relative px-6 py-5 ${status.bgColor} border-b ${status.borderColor}`}>
+          <div className="flex items-start justify-between">
+            <div className="flex items-start gap-4">
+              {/* Status indicator */}
+              <div className={`w-12 h-12 rounded-xl ${status.color} flex items-center justify-center shadow-lg`}>
+                <MapPin className="w-6 h-6 text-white" />
+              </div>
+              
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">{location.name}</h2>
+                <div className="flex items-center gap-3 mt-1">
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${status.bgColor} ${status.textColor} border ${status.borderColor}`}>
+                    <span className={`w-2 h-2 rounded-full ${status.color}`}></span>
+                    {status.label}
+                  </span>
+                  <span className="text-sm text-gray-500">{location.center}</span>
+                </div>
+              </div>
+            </div>
+            
+            <button 
+              onClick={onClose} 
+              className="p-2 rounded-lg hover:bg-white/50 transition-colors"
+            >
+              <X className="w-5 h-5 text-gray-500" />
+            </button>
+          </div>
+
+          {/* Note button if exists */}
+          {location.note && location.note.length > 0 && (
+            <button 
+              onClick={() => setNoteOpen(true)} 
+              className="absolute bottom-3 right-6 flex items-center gap-2 px-3 py-1.5 bg-white/80 hover:bg-white rounded-lg text-sm font-medium text-blue-600 transition-colors shadow-sm"
+            >
+              <FileText className="w-4 h-4" />
+              Notu Görüntüle
+            </button>
+          )}
         </div>
 
-        <div className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Lokasyon Adı</label>
-              <p className="text-sm text-gray-900">{location.name}</p>
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6">
+          
+          {/* Info Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+              <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Koordinatlar</p>
+              <p className="text-sm font-semibold text-gray-900">{location.coordinates[0]}, {location.coordinates[1]}</p>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Merkez</label>
-              <p className="text-sm text-gray-900">{location.center}</p>
+            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+              <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Marka</p>
+              <p className="text-sm font-semibold text-gray-900">{location.brand}</p>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Koordinatlar</label>
-              <p className="text-sm text-gray-900">{location.coordinates[0]}, {location.coordinates[1]}</p>
+            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+              <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Model</p>
+              <p className="text-sm font-semibold text-gray-900">{location.model}</p>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Adres</label>
-              <div className="flex items-center gap-3">
-                <p className="text-sm text-gray-900">{location.address || '—'}</p>
-                {canOpenMaps ? (
-                  <a
-                    href={mapsUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-blue-600 hover:underline"
-                    aria-label={`Yol tarifi: ${location.name}`}
-                  >
-                    Yol tarifi
-                  </a>
-                ) : null}
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Marka</label>
-              <p className="text-sm text-gray-900">{location.brand}</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
-              <p className="text-sm text-gray-900">{location.model}</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Durum</label>
-              <div className="flex items-start justify-between">
-                <div>
-                  {(() => {
-                    const isActive = !!location.details.isActive;
-                    const isConfigured = !!location.details.isConfigured;
-                    if (isActive && isConfigured) {
-                      return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Aktif</span>;
-                    }
-                    if (isConfigured) {
-                      return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Konfigüre Edildi</span>;
-                    }
-                    return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">Pasif</span>;
-                  })()}
-
-                  {/* {location.note && location.note.length > 0 && (
-                    <div className="mt-2 text-sm text-gray-700 max-w-[22rem] truncate">
-                      <span className="font-medium">Not:</span> {location.note}
-                    </div>
-                  )} */}
-                </div>
-
-                {location.note && location.note.length > 0 && (
-                  <button onClick={() => setNoteOpen(true)} className="ml-4 p-1 text-blue-600 hover:text-blue-800" title="Notu aç">
-                    <FileText className="w-5 h-5" />
-                  </button>
-                )}
-              </div>
+            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+              <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Merkez Tipi</p>
+              <p className="text-sm font-semibold text-gray-900">{location.details.equipment.transformerCenterType || '—'}</p>
             </div>
           </div>
 
+          {/* Address with directions */}
+          {(location.address || canOpenMaps) && (
+            <div className="bg-blue-50 rounded-xl p-4 border border-blue-100 mb-6 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-blue-600 uppercase tracking-wide mb-1">Adres</p>
+                <p className="text-sm font-medium text-gray-900">{location.address || 'Adres girilmemiş'}</p>
+              </div>
+              {canOpenMaps && (
+                <a
+                  href={mapsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Navigation className="w-4 h-4" />
+                  Yol Tarifi
+                </a>
+              )}
+            </div>
+          )}
+
+          {/* System Status */}
           <div className="mb-6">
-            <h4 className="text-md font-semibold text-gray-900 mb-3">Sistem Durumu</h4>
-            <div className="flex flex-wrap gap-3">
-              <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${location.details.hasGPS ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                <Zap className="w-4 h-4 mr-1" /> GPS: {location.details.hasGPS ? 'Aktif' : 'Pasif'}
-              </span>
+            <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">Sistem Durumu</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+              {/* Kabulü Yapıldı */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.isAccepted ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.isAccepted ? 'bg-green-500' : 'bg-gray-300'}`}>
+                  <Shield className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">Kabulü Yapıldı</p>
+                  <p className={`text-sm font-semibold ${location.details.isAccepted ? 'text-green-700' : 'text-gray-500'}`}>
+                    {location.details.isAccepted ? 'Evet' : 'Hayır'}
+                  </p>
+                </div>
+              </div>
 
-              <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${location.details.hasRTU ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                <Database className="w-4 h-4 mr-1" /> RTU: {location.details.hasRTU ? 'Aktif' : 'Pasif'}
-              </span>
+              {/* Montajı Yapıldı (Firewall) */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.isInstalled ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.isInstalled ? 'bg-indigo-500' : 'bg-gray-300'}`}>
+                  <Settings className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">Montaj (FW)</p>
+                  <p className={`text-sm font-semibold ${location.details.isInstalled ? 'text-indigo-700' : 'text-gray-500'}`}>
+                    {location.details.isInstalled ? 'Yapıldı' : 'Yapılmadı'}
+                  </p>
+                </div>
+              </div>
 
-              <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${location.details.hasPanos ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                <Cpu className="w-4 h-4 mr-1" /> Panos: {location.details.hasPanos ? 'Aktif' : 'Pasif'}
-              </span>
+              {/* Konfigüre Edildi */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.isConfigured ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.isConfigured ? 'bg-amber-500' : 'bg-gray-300'}`}>
+                  <Activity className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">Konfigüre</p>
+                  <p className={`text-sm font-semibold ${location.details.isConfigured ? 'text-amber-700' : 'text-gray-500'}`}>
+                    {location.details.isConfigured ? 'Edildi' : 'Edilmedi'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Devreye Alındı (Firewall) */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.isActive ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.isActive ? 'bg-green-500' : 'bg-gray-300'}`}>
+                  <Zap className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">Devreye (FW)</p>
+                  <p className={`text-sm font-semibold ${location.details.isActive ? 'text-green-700' : 'text-gray-500'}`}>
+                    {location.details.isActive ? 'Alındı' : 'Alınmadı'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Kartlı Geçiş */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.hasCardAccess ? 'bg-purple-50 border-purple-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.hasCardAccess ? 'bg-purple-500' : 'bg-gray-300'}`}>
+                  <CreditCard className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">Kartlı Geçiş</p>
+                  <p className={`text-sm font-semibold ${location.details.hasCardAccess ? 'text-purple-700' : 'text-gray-500'}`}>
+                    {location.details.hasCardAccess ? 'Var' : 'Yok'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Montajı Yapıldı (Kartlı Geçiş) */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.isInstalledCardAccess ? 'bg-teal-50 border-teal-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.isInstalledCardAccess ? 'bg-teal-500' : 'bg-gray-300'}`}>
+                  <Settings className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">Montaj (KG)</p>
+                  <p className={`text-sm font-semibold ${location.details.isInstalledCardAccess ? 'text-teal-700' : 'text-gray-500'}`}>
+                    {location.details.isInstalledCardAccess ? 'Yapıldı' : 'Yapılmadı'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Devreye Alındı (Kartlı Geçiş) */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.isActiveCardAccess ? 'bg-cyan-50 border-cyan-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.isActiveCardAccess ? 'bg-cyan-500' : 'bg-gray-300'}`}>
+                  <Zap className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">Devreye (KG)</p>
+                  <p className={`text-sm font-semibold ${location.details.isActiveCardAccess ? 'text-cyan-700' : 'text-gray-500'}`}>
+                    {location.details.isActiveCardAccess ? 'Alındı' : 'Alınmadı'}
+                  </p>
+                </div>
+              </div>
+
+              {/* GPS */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.hasGPS ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.hasGPS ? 'bg-green-500' : 'bg-gray-300'}`}>
+                  <Radio className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">GPS</p>
+                  <p className={`text-sm font-semibold ${location.details.hasGPS ? 'text-green-700' : 'text-gray-500'}`}>
+                    {location.details.hasGPS ? 'Aktif' : 'Pasif'}
+                  </p>
+                </div>
+              </div>
+
+              {/* RTU */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.hasRTU ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.hasRTU ? 'bg-green-500' : 'bg-gray-300'}`}>
+                  <Database className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">RTU</p>
+                  <p className={`text-sm font-semibold ${location.details.hasRTU ? 'text-green-700' : 'text-gray-500'}`}>
+                    {location.details.hasRTU ? 'Aktif' : 'Pasif'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Panos */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.hasPanos ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.hasPanos ? 'bg-green-500' : 'bg-gray-300'}`}>
+                  <Cpu className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">Panos</p>
+                  <p className={`text-sm font-semibold ${location.details.hasPanos ? 'text-green-700' : 'text-gray-500'}`}>
+                    {location.details.hasPanos ? 'Aktif' : 'Pasif'}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
 
+          {/* Equipment Grid */}
           <div>
-            <h4 className="text-md font-semibold text-gray-900 mb-3">Ekipman Detayları</h4>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
-              { /* Render equipment cards similarly to App's block */ }
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">İhtiyaç Duyulan Güvenlik Duvarı</p>
-                <p className="text-gray-900">{location.details.equipment.securityFirewall}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">İhtiyaç Duyulan Ağ Anahtarı</p>
-                <p className="text-gray-900">{location.details.equipment.networkSwitch}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">İhtiyaç Duyulan RTU Sayısı</p>
-                <p className="text-gray-900">{location.details.equipment.rtuCount}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">İhtiyaç Duyulan GPS Kart/Anten</p>
-                <p className="text-gray-900">{location.details.equipment.gpsCardAntenna}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">İhtiyaç Duyulan RTU Panosu</p>
-                <p className="text-gray-900">{location.details.equipment.rtuPanel}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">İhtiyaç Duyulan BTP Panosu</p>
-                <p className="text-gray-900">{location.details.equipment.btpPanel}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">İhtiyaç Duyulan Enerji Analizörü</p>
-                <p className="text-gray-900">{location.details.equipment.energyAnalyzer}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">İhtiyaç Duyulan YKGC</p>
-                <p className="text-gray-900">{location.details.equipment.ykgcCount}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">TEİAŞ RTU Kurulum İhtiyacı</p>
-                <p className="text-gray-900">{location.details.equipment.teiasRtuInstallation}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">İç Ortam Dome Kamera</p>
-                <p className="text-gray-900">{location.details.equipment.indoorDomeCamera}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">Ağ Video Yönetim</p>
-                <p className="text-gray-900">{location.details.equipment.networkVideoManagement}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">Akıllı Kontrol Ünitesi</p>
-                <p className="text-gray-900">{location.details.equipment.smartControlUnit}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">Kart Okuyucu</p>
-                <p className="text-gray-900">{location.details.equipment.cardReader}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">Ağ Kayıt Ünitesi</p>
-                <p className="text-gray-900">{location.details.equipment.networkRecordingUnit}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">Geçiş Kontrol Sistemi</p>
-                <p className="text-gray-900">{location.details.equipment.accessControlSystem}</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="font-medium text-gray-700">Transformatör Merkez Tipi</p>
-                <p className="text-gray-900">{location.details.equipment.transformerCenterType}</p>
-              </div>
+            <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">Ekipman Detayları</h3>
+            <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
+              {equipmentItems.map((item, index) => (
+                <div 
+                  key={index} 
+                  className={`relative p-3 rounded-xl border-2 text-center transition-colors ${
+                    item.value > 0 
+                      ? 'bg-indigo-50 border-indigo-200' 
+                      : 'bg-gray-50 border-gray-100'
+                  }`}
+                >
+                  <div className={`w-8 h-8 mx-auto mb-2 rounded-lg flex items-center justify-center ${
+                    item.value > 0 ? 'bg-indigo-500' : 'bg-gray-300'
+                  }`}>
+                    <item.icon className="w-4 h-4 text-white" />
+                  </div>
+                  <p className={`text-2xl font-bold ${item.value > 0 ? 'text-indigo-600' : 'text-gray-400'}`}>
+                    {item.value}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1 leading-tight">{item.label}</p>
+                </div>
+              ))}
             </div>
           </div>
+        </div>
 
-          <div className="mt-6 flex justify-end">
-            {/** Show Düzenle for admins and editors (editors will be limited in the edit modal) */}
-            {(isAdmin || isEditor) ? (
-              <button onClick={() => onEdit(location)} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 mr-3">Düzenle</button>
-            ) : null}
-            <button onClick={onClose} className="px-4 py-2 bg-gray-100 rounded-md">Kapat</button>
-          </div>
+        {/* Footer */}
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+          {(isAdmin || isEditor) && (
+            <button 
+              onClick={() => onEdit(location)} 
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors shadow-sm"
+            >
+              Düzenle
+            </button>
+          )}
+          <button 
+            onClick={onClose} 
+            className="px-5 py-2.5 bg-white hover:bg-gray-100 text-gray-700 rounded-xl font-medium border border-gray-200 transition-colors"
+          >
+            Kapat
+          </button>
         </div>
       </div>
+
       {noteOpen && (
         <NoteModal isOpen={noteOpen} title={location.name + ' - Not'} note={location.note} onClose={() => setNoteOpen(false)} />
       )}

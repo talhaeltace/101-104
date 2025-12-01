@@ -22,7 +22,7 @@ import LocationTrackingOverlay from './components/LocationTrackingOverlay';
 import { VersionChecker } from './components/VersionChecker';
 import { useLocationTracking } from './hooks/useLocationTracking';
 import { logArrival, logCompletion } from './lib/activityLogger';
-import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted } from './lib/notifications';
+import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted, notifyRouteStarted } from './lib/notifications';
 import { supabase } from './lib/supabase';
 import LoginPage from './pages/LoginPage';
 import { Routes, Route, Navigate } from 'react-router-dom';
@@ -308,7 +308,7 @@ function App() {
 
   // Mobile drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted'>('all');
 
   const currentRegion = locations.find(r => r.id === selectedRegion);
   const allLocations = useMemo(() => locations.flatMap(region => region.locations), [locations]);
@@ -856,7 +856,7 @@ function App() {
           <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
             {/* Header: on mobile show hamburger + logo + region selector only.
                 On desktop show logo + region selector + actions (export, yeni/rota, avatar). */}
-        <header className="fixed inset-x-0 top-0 z-50 bg-white/90 backdrop-blur-md border-b border-gray-100 shadow-sm transition-all duration-300" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+            <header className="fixed inset-x-0 top-0 z-50 bg-white/90 backdrop-blur-md border-b border-gray-100 shadow-sm transition-all duration-300" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
               <div className="w-full px-4 sm:px-6 lg:px-8">
                 <div className="flex items-center justify-between h-16 sm:h-20">
                   <div className="flex items-center gap-4 shrink-0">
@@ -1138,7 +1138,7 @@ function App() {
             )}
 
             {/* main: pad top so content doesn't hide under fixed header */}
-            <main className="pt-20 sm:pt-24 max-w-8xl mx-auto px-4 sm:px-6 lg:px-0 pb-20">
+            <main className="pt-20 sm:pt-24 w-full px-4 sm:px-6 lg:px-8 pb-20">
               {/* Mobile compact stats (show parentheses with selected counts) */}
               <div className="mb-4">
                 <div className="grid grid-cols-1 gap-4">
@@ -1248,6 +1248,8 @@ function App() {
                   setCurrentRouteIndex(0);
                   setIsTrackingRoute(true);
                   setView('map');
+                  // Bildirim: rota başlatıldı
+                  notifyRouteStarted(currentUser?.username ?? null, route.length);
                   
                   // Focus on first location
                   if (route.length > 0) {

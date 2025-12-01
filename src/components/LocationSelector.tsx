@@ -16,8 +16,8 @@ interface LocationSelectorProps {
   onLocationDoubleClick?: (location: Location) => void;
   onShowDetails?: (location: Location) => void;
   // optional controlled filter state
-  statusFilter?: 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active';
-  onStatusFilterChange?: (s: 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active') => void;
+  statusFilter?: 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted';
+  onStatusFilterChange?: (s: 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted') => void;
 }
 
 const LocationSelector: React.FC<LocationSelectorProps> = ({ 
@@ -39,9 +39,9 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   const effectiveSearchTerm = typeof searchTermProp === 'string' ? searchTermProp : internalSearchTerm;
   const [isExpanded, setIsExpanded] = useState(true);
   const [isPressed, setIsPressed] = useState(false);
-  const [internalStatusFilter, setInternalStatusFilter] = useState<'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' >('all');
+  const [internalStatusFilter, setInternalStatusFilter] = useState<'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted'>('all');
   const effectiveStatusFilter = statusFilterProp ?? internalStatusFilter;
-  const setStatusFilter = (s: 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active') => {
+  const setStatusFilter = (s: 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted') => {
     if (onStatusFilterChange) onStatusFilterChange(s);
     else setInternalStatusFilter(s);
   };
@@ -93,6 +93,8 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
       case 'missing':
         // eksik = neither configured nor active
         return !location.details.isActive && !location.details.isConfigured;
+      case 'accepted':
+        return !!location.details.isAccepted;
       default:
         return true;
     }
@@ -193,51 +195,55 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
           )}
         </div>
         {g.items.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-            {g.items.map(location => (
-              <div
-                key={`${g.region.id}-${location.id}`}
-                onClick={() => {
-                  onLocationSelect(location);
-                  if (onShowDetails) requestAnimationFrame(() => onShowDetails(location));
-                }}
-                onDoubleClick={() => onLocationDoubleClick?.(location)}
-                className={`p-3 border rounded-md hover:bg-blue-50 cursor-pointer transition-colors duration-150 ${
-                  selectedLocation?.id === location.id ? 'bg-blue-100 border-blue-200' : 'bg-white border-gray-50'
-                }`}
-              >
-                <div className="flex flex-col h-full">
-                  <div className="flex items-center mb-1">
-                    <MapPin className="w-4 h-4 text-gray-500 mr-2 flex-shrink-0" />
-                    <h4 className="font-medium text-gray-900 text-sm truncate">{location.name}</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+            {g.items.map(location => {
+              const status = getStatus(location.details);
+              return (
+                <div
+                  key={`${g.region.id}-${location.id}`}
+                  onClick={() => {
+                    onLocationSelect(location);
+                    if (onShowDetails) requestAnimationFrame(() => onShowDetails(location));
+                  }}
+                  onDoubleClick={() => onLocationDoubleClick?.(location)}
+                  className={`group relative bg-white rounded-xl border-2 p-4 cursor-pointer transition-all duration-200 hover:shadow-md ${
+                    selectedLocation?.id === location.id 
+                      ? 'border-blue-400 bg-blue-50 shadow-sm' 
+                      : 'border-gray-100 hover:border-gray-200'
+                  }`}
+                >
+                  {/* Status indicator dot - top right */}
+                  <div className={`absolute top-3 right-3 w-3 h-3 rounded-full ${status.dotClass} ring-2 ring-white`} />
+                  
+                  {/* Location name */}
+                  <div className="flex items-start gap-2 mb-3 pr-4">
+                    <MapPin className={`w-4 h-4 mt-0.5 flex-shrink-0 ${status.colorClass}`} />
+                    <h4 className="font-semibold text-gray-900 text-sm leading-tight">{location.name}</h4>
                   </div>
 
-                  <div className="text-xs text-gray-600 mb-1 truncate">
-                    <span className="font-medium">Merkez:</span> {location.center}
-                  </div>
-
-                  <div className="text-xs text-gray-600 mb-2 truncate">
-                    <Cpu className="w-3 h-3 inline mr-1" />
-                    {location.brand} - {location.model}
-                  </div>
-
-                  <div className="mt-auto flex items-center justify-between">
-                    <div className="text-xs">
-                      {(() => {
-                        const status = getStatus(location.details);
-                        return (
-                          <span className={`font-medium ${status.colorClass}`}>
-                            Durum: <span className={`font-normal ${status.colorClass}`}>{status.label}</span>
-                          </span>
-                        );
-                      })()}
+                  {/* Info rows */}
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex items-center text-gray-600">
+                      <span className="text-gray-400 w-14 flex-shrink-0">Merkez</span>
+                      <span className="font-medium truncate">{location.center}</span>
                     </div>
+                    
+                    <div className="flex items-center text-gray-600">
+                      <Cpu className="w-3 h-3 text-gray-400 mr-1 flex-shrink-0" />
+                      <span className="truncate">{location.brand} - {location.model}</span>
+                    </div>
+                  </div>
 
-                    <div className={`w-3 h-3 rounded-full ${getStatus(location.details).dotClass}`} />
+                  {/* Status badge - bottom */}
+                  <div className="mt-3 pt-3 border-t border-gray-100">
+                    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${status.colorClass}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${status.dotClass}`}></span>
+                      {status.label}
+                    </span>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="p-3 text-sm text-gray-500">Bu bölgede arama kriterlerine uyan lokasyon yok.</div>
@@ -321,57 +327,58 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
         )}
 
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-          {filteredLocations.map((location) => (
-            <div
-              key={location.id}
-              onClick={() => {
-                // make sure parent marks this as selected so the blue background shows immediately
-                onLocationSelect(location);
-                // then open details; use requestAnimationFrame so the selection can render before modal covers it
-                if (onShowDetails) requestAnimationFrame(() => onShowDetails(location));
-              }}
-              onDoubleClick={() => onLocationDoubleClick?.(location)}
-              className={`p-3 border rounded-md hover:bg-blue-50 cursor-pointer transition-colors duration-150 ${
-                selectedLocation?.id === location.id ? 'bg-blue-100 border-blue-200' : 'bg-white border-gray-50'
-              }`}
-            >
-              <div className="flex flex-col h-full">
-                <div className="flex items-center mb-1">
-                  <MapPin className="w-4 h-4 text-gray-500 mr-2 flex-shrink-0" />
-                  <h4 className="font-medium text-gray-900 text-sm truncate">{location.name}</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+          {filteredLocations.map((location) => {
+            const status = getStatus(location.details);
+            return (
+              <div
+                key={location.id}
+                onClick={() => {
+                  onLocationSelect(location);
+                  if (onShowDetails) requestAnimationFrame(() => onShowDetails(location));
+                }}
+                onDoubleClick={() => onLocationDoubleClick?.(location)}
+                className={`group relative bg-white rounded-xl border-2 p-4 cursor-pointer transition-all duration-200 hover:shadow-md ${
+                  selectedLocation?.id === location.id 
+                    ? 'border-blue-400 bg-blue-50 shadow-sm' 
+                    : 'border-gray-100 hover:border-gray-200'
+                }`}
+              >
+                {/* Status indicator dot - top right */}
+                <div className={`absolute top-3 right-3 w-3 h-3 rounded-full ${status.dotClass} ring-2 ring-white`} />
+                
+                {/* Location name */}
+                <div className="flex items-start gap-2 mb-3 pr-4">
+                  <MapPin className={`w-4 h-4 mt-0.5 flex-shrink-0 ${status.colorClass}`} />
+                  <h4 className="font-semibold text-gray-900 text-sm leading-tight">{location.name}</h4>
                 </div>
 
-                <div className="text-xs text-gray-600 mb-1 truncate">
-                  <span className="font-medium">Merkez:</span> {location.center}
-                </div>
-
-                <div className="text-xs text-gray-600 mb-2 truncate">
-                  <Cpu className="w-3 h-3 inline mr-1" />
-                  {location.brand} - {location.model}
-                </div>
-
-                <div className="mt-auto flex items-center justify-between">
-                  <div className="text-xs">
-                    {/** Show a single status instead of RTU / GPS */}
-                    {(() => {
-                      const status = getStatus(location.details);
-                      return (
-                        <span className={`font-medium ${status.colorClass}`}>
-                          Durum: <span className={`font-normal ${status.colorClass}`}>{status.label}</span>
-                        </span>
-                      );
-                    })()}
+                {/* Info rows */}
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex items-center text-gray-600">
+                    <span className="text-gray-400 w-14 flex-shrink-0">Merkez</span>
+                    <span className="font-medium truncate">{location.center}</span>
                   </div>
 
-                  <div className={`w-3 h-3 rounded-full ${getStatus(location.details).dotClass}`} />
+                  <div className="flex items-center text-gray-600">
+                    <Cpu className="w-3 h-3 text-gray-400 mr-1 flex-shrink-0" />
+                    <span className="truncate">{location.brand} - {location.model}</span>
+                  </div>
+                </div>
+
+                {/* Status badge - bottom */}
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${status.colorClass}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${status.dotClass}`}></span>
+                    {status.label}
+                  </span>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {filteredLocations.length === 0 && (
-            <div className="col-span-1 sm:col-span-2 md:col-span-3 lg:col-span-5 p-8 text-center text-gray-500">
+            <div className="col-span-1 sm:col-span-2 md:col-span-3 lg:col-span-4 xl:col-span-5 p-8 text-center text-gray-500">
               <Search className="w-8 h-8 mx-auto mb-3 text-gray-400" />
               <p>Aradığınız kriterlere uygun lokasyon bulunamadı.</p>
             </div>
@@ -385,16 +392,30 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     <div className="bg-white border-t border-gray-200 shadow-lg">
       {/* Header */}
       <div className="p-4 border-b border-gray-100">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold text-gray-900">Lokasyon Seçici</h3>
-          <div className="flex items-center space-x-3">
-            <div className="flex items-center space-x-2">
-              <select
-                value={effectiveStatusFilter}
-                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setStatusFilter(e.target.value as 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active')}
-                className="text-sm border border-gray-300 rounded-md px-2 py-1"
-              >
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900">Lokasyon Seçici</h3>
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            {isExpanded ? (
+              <ChevronUp className="w-5 h-5 text-gray-500" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-gray-500" />
+            )}
+          </button>
+        </div>
+
+        {/* Filter select */}
+        <div className="mb-3">
+          <label className="block text-xs font-medium text-gray-500 mb-1">Filtre</label>
+          <select
+            value={effectiveStatusFilter}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setStatusFilter(e.target.value as 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted')}
+            className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400"
+          >
                 <option value="all">Tümü</option>
+                <option value="accepted">Kabulü Yapılanlar</option>
                 <option value="active">Devreye Alınmış</option>
                 <option value="configured">Konfigüre Edildi</option>
                 <option value="card">Kartlı Geçiş</option>
@@ -405,21 +426,8 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
                 <option value="missing">Eksik</option>
                 <option value="notes">Notlar</option>
               </select>
-            </div>
-
-            <button
-              onClick={() => setIsExpanded(!isExpanded)}
-              className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              {isExpanded ? (
-                <ChevronUp className="w-5 h-5 text-gray-500" />
-              ) : (
-                <ChevronDown className="w-5 h-5 text-gray-500" />
-              )}
-            </button>
-          </div>
         </div>
-        
+
         {/* Search - always render a search input under the selector header.
             If parent provides onSearchTermChange, call it so both inputs stay synced; otherwise use internal state. */}
         <div className="relative">
@@ -461,7 +469,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               // flush internal search to parent when editing ends
               if (onSearchTermChange) onSearchTermChange(internalSearchTerm);
             }}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full pl-9 pr-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400"
           />
         </div>
       </div>
