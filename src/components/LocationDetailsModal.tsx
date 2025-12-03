@@ -10,9 +10,10 @@ interface Props {
   onEdit: (location: Location) => void;
   isAdmin?: boolean;
   isEditor?: boolean;
+  isViewer?: boolean;
 }
 
-const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEdit, isAdmin, isEditor }) => {
+const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEdit, isAdmin, isEditor, isViewer }) => {
   const [noteOpen, setNoteOpen] = useState(false);
   
   const mapsUrl =
@@ -129,10 +130,12 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
           
           {/* Info Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
-              <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Koordinatlar</p>
-              <p className="text-sm font-semibold text-gray-900">{location.coordinates[0]}, {location.coordinates[1]}</p>
-            </div>
+            {!isViewer && (
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+                <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Koordinatlar</p>
+                <p className="text-sm font-semibold text-gray-900">{location.coordinates[0]}, {location.coordinates[1]}</p>
+              </div>
+            )}
             <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
               <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Marka</p>
               <p className="text-sm font-semibold text-gray-900">{location.brand}</p>
@@ -147,8 +150,8 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
             </div>
           </div>
 
-          {/* Address with directions */}
-          {(location.address || canOpenMaps) && (
+          {/* Address with directions - hidden for viewers */}
+          {!isViewer && (location.address || canOpenMaps) && (
             <div className="bg-blue-50 rounded-xl p-4 border border-blue-100 mb-6 flex items-center justify-between">
               <div>
                 <p className="text-xs text-blue-600 uppercase tracking-wide mb-1">Adres</p>

@@ -35,7 +35,7 @@ function App() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [detailsModalLocation, setDetailsModalLocation] = useState<Location | null>(null);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
-  const [userRole, setUserRole] = useState<'admin' | 'user' | 'editor' | null>(null);
+  const [userRole, setUserRole] = useState<'admin' | 'user' | 'editor' | 'viewer' | null>(null);
 
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string; role: string } | null>(null);
 
@@ -842,9 +842,9 @@ function App() {
       <VersionChecker />
       <Routes>
         <Route path="/login" element={<LoginPage onLogin={(user) => {
-        // Accept 'admin' or 'editor' (case-insensitive) or default to 'user'
+        // Accept 'admin', 'editor', 'viewer' (case-insensitive) or default to 'user'
         const r = String(user.role || '').toLowerCase();
-        const role = r === 'admin' ? 'admin' : (r === 'editor' ? 'editor' : 'user');
+        const role = r === 'admin' ? 'admin' : (r === 'editor' ? 'editor' : (r === 'viewer' ? 'viewer' : 'user'));
         setUserRole(role);
         setCurrentUser(user);
         // persist session
@@ -974,7 +974,7 @@ function App() {
                             </div>
                             <div className="hidden xl:block">
                                 <div className="text-sm font-semibold text-gray-700 group-hover:text-blue-600 transition-colors">{currentUser?.username ?? ''}</div>
-                                <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">{userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : 'Kullanıcı'}</div>
+                                <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">{userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}</div>
                             </div>
                         </div>
                         <button 
@@ -1061,7 +1061,7 @@ function App() {
                             <div className="w-9 h-9 rounded-full bg-indigo-500 flex items-center justify-center text-white font-semibold text-sm">{(currentUser?.username ?? 'U').charAt(0).toUpperCase()}</div>
                             <div>
                               <div className="font-medium">{currentUser?.username}</div>
-                              <div className="text-xs text-gray-500">{userRole === 'admin' ? 'Admin' : userRole === 'editor' ? 'Editor' : 'User'}</div>
+                              <div className="text-xs text-gray-500">{userRole === 'admin' ? 'Admin' : userRole === 'editor' ? 'Editor' : userRole === 'viewer' ? 'Viewer' : 'User'}</div>
                             </div>
                           </div>
                           <button onClick={async () => { if (currentUser) { try { await pushActivity(currentUser.username, 'Çıkış yaptı'); } catch (e) { console.warn('pushActivity failed on drawer logout', e); } } setUserRole(null); setCurrentUser(null); window.location.href = '/login'; }} className="mt-2 w-full px-3 py-2 bg-red-600 text-white rounded-md">Çıkış</button>
@@ -1234,6 +1234,7 @@ function App() {
                   }}
                   isAdmin={userRole === 'admin'}
                   isEditor={userRole === 'editor'}
+                  isViewer={userRole === 'viewer'}
                 />
               )}
               {/* Route Builder Modal */}
