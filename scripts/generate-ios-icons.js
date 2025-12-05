@@ -26,6 +26,7 @@ async function generateIcons() {
           fit: 'cover',
           position: 'center'
         })
+        .flatten({ background: { r: 255, g: 255, b: 255 } }) // Remove alpha, add white background
         .png()
         .toFile(outputPath);
       console.log(`✓ Generated ${size}x${size} icon`);
