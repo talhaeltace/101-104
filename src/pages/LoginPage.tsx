@@ -16,7 +16,7 @@ const LoginPage: React.FC<Props> = ({ onLogin }) => {
         <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-blue-600 mb-6 ring-4 ring-blue-100">
           <MapPin className="w-10 h-10 text-white" />
         </div>
-        <h1 className="text-4xl font-bold text-gray-900 tracking-tight">101-104</h1>
+        <h1 className="text-4xl font-bold text-gray-900 tracking-tight">MapFlow</h1>
         <p className="text-gray-600 mt-2 text-lg">Saha Operasyon Yönetimi</p>
       </div>
       
