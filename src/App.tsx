@@ -25,6 +25,8 @@ import { logArrival, logCompletion } from './lib/activityLogger';
 import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted, notifyRouteStarted } from './lib/notifications';
 import { supabase } from './lib/supabase';
 import LoginPage from './pages/LoginPage';
+import TeamPanel from './components/TeamPanel';
+import { updateTeamStatus, clearTeamStatus, getUserRoute, CompletedLocationInfo, calculateMinutesBetween } from './lib/teamStatus';
 import { Routes, Route, Navigate } from 'react-router-dom';
 
 function App() {
@@ -56,6 +58,13 @@ function App() {
   // Initial work state for restoring from localStorage
   const [initialWorkState, setInitialWorkState] = useState<{ isWorking: boolean; workStartTime: Date | null } | undefined>(undefined);
 
+  // Detailed tracking state
+  const [completedLocations, setCompletedLocations] = useState<CompletedLocationInfo[]>([]);
+  const [currentLegStartTime, setCurrentLegStartTime] = useState<Date | null>(null);
+  const [totalTravelMinutes, setTotalTravelMinutes] = useState<number>(0);
+  const [totalWorkMinutes, setTotalWorkMinutes] = useState<number>(0);
+  const [todayCompletedCount, setTodayCompletedCount] = useState<number>(0);
+
   // Haversine distance calculation in km (kept for future use, currently unused)
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
     const R = 6371;
@@ -84,54 +93,74 @@ function App() {
     targetLocation: currentTargetLocation,
     proximityThreshold: 100,
     userPosition: userLocation,
-    testMode: false,
+    testMode: true,
     initialWorkState
   });
 
-  // Restore route state from localStorage on mount
+  // Restore route state from database on mount (when user is logged in)
   useEffect(() => {
-    try {
-      const savedRoute = localStorage.getItem('active_route_state');
-      if (savedRoute) {
-        const parsed = JSON.parse(savedRoute);
-        if (parsed.activeRoute && Array.isArray(parsed.activeRoute)) {
-          setActiveRoute(parsed.activeRoute);
-          setCurrentRouteIndex(parsed.currentRouteIndex || 0);
+    const loadRouteFromDb = async () => {
+      if (!currentUser) return;
+      
+      try {
+        console.log('Loading route from database for user:', currentUser.id);
+        const routeData = await getUserRoute(currentUser.id);
+        console.log('Route data from DB:', routeData);
+        
+        if (routeData && routeData.activeRoute && Array.isArray(routeData.activeRoute) && routeData.activeRoute.length > 0) {
+          console.log('Restoring route with', routeData.activeRoute.length, 'locations, index:', routeData.currentRouteIndex);
+          setActiveRoute(routeData.activeRoute);
+          setCurrentRouteIndex(routeData.currentRouteIndex || 0);
           setIsTrackingRoute(true);
           // Restore work state
-          if (parsed.isWorking !== undefined) {
+          if (routeData.isWorking !== undefined) {
             setInitialWorkState({
-              isWorking: parsed.isWorking,
-              workStartTime: parsed.workStartTime ? new Date(parsed.workStartTime) : null
+              isWorking: routeData.isWorking,
+              workStartTime: routeData.workStartTime
             });
           }
+          // Restore detailed tracking state
+          setCompletedLocations(routeData.completedLocations || []);
+          setCurrentLegStartTime(routeData.currentLegStartTime);
+          setTotalTravelMinutes(routeData.totalTravelMinutes || 0);
+          setTotalWorkMinutes(routeData.totalWorkMinutes || 0);
+          setTodayCompletedCount(routeData.todayCompletedCount || 0);
+          
           // Focus on current location
-          if (parsed.activeRoute[parsed.currentRouteIndex || 0]) {
-            setFocusLocation(parsed.activeRoute[parsed.currentRouteIndex || 0]);
+          const currentLoc = routeData.activeRoute[routeData.currentRouteIndex || 0];
+          if (currentLoc) {
+            setFocusLocation(currentLoc);
+          }
+        } else {
+          console.log('No active route found for user');
+          // Restore today's stats even if no active route
+          if (routeData) {
+            setCompletedLocations(routeData.completedLocations || []);
+            setTotalTravelMinutes(routeData.totalTravelMinutes || 0);
+            setTotalWorkMinutes(routeData.totalWorkMinutes || 0);
+            setTodayCompletedCount(routeData.todayCompletedCount || 0);
+          }
+          // Register editor users with idle status only if they don't have an active route
+          if (userRole === 'editor') {
+            await updateTeamStatus({
+              userId: currentUser.id,
+              username: currentUser.username,
+              status: 'idle',
+              totalRouteCount: 0,
+              completedCount: 0
+            });
           }
         }
+      } catch (err) {
+        console.error('Error loading route from database:', err);
       }
-    } catch (e) {
-      // ignore invalid stored data
-    }
-  }, []);
+    };
+    
+    loadRouteFromDb();
+  }, [currentUser, userRole]);
 
-  // Save route state to localStorage whenever it changes
-  useEffect(() => {
-    if (activeRoute && activeRoute.length > 0 && isTrackingRoute) {
-      try {
-        localStorage.setItem('active_route_state', JSON.stringify({
-          activeRoute,
-          currentRouteIndex,
-          isWorking: trackingState.isWorking,
-          workStartTime: trackingState.workStartTime?.toISOString(),
-          timestamp: new Date().toISOString()
-        }));
-      } catch (e) {
-        // ignore storage errors
-      }
-    }
-  }, [activeRoute, currentRouteIndex, isTrackingRoute, trackingState.isWorking, trackingState.workStartTime]);
+  // Route state is now saved to database via updateTeamStatus calls
+  // No localStorage needed - each user's route is stored in team_status table
 
   // Tracking state is managed silently; no console logging to avoid refresh-like noise
 
@@ -290,25 +319,35 @@ function App() {
   const [isAuthChecking, setIsAuthChecking] = useState(true);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('app_session_v1');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed?.user && parsed?.role) {
-          setCurrentUser(parsed.user);
-          setUserRole(parsed.role);
+    const restoreSession = async () => {
+      try {
+        const raw = localStorage.getItem('app_session_v1');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?.user && parsed?.role) {
+            setCurrentUser(parsed.user);
+            setUserRole(parsed.role);
+            
+            // For editor users, check if they have an active route before setting idle status
+            // Route restoration happens in a separate useEffect that triggers on currentUser change
+            // So we don't update team status here to avoid overwriting existing route data
+          }
         }
+      } catch (_e) {
+        // ignore
+      } finally {
+        setIsAuthChecking(false);
       }
-    } catch (e) {
-      // ignore
-    } finally {
-      setIsAuthChecking(false);
-    }
+    };
+    restoreSession();
   }, []);
 
   // Mobile drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted'>('all');
+
+  // Team panel state
+  const [isTeamPanelOpen, setIsTeamPanelOpen] = useState(false);
 
   const currentRegion = locations.find(r => r.id === selectedRegion);
   const allLocations = useMemo(() => locations.flatMap(region => region.locations), [locations]);
@@ -421,40 +460,69 @@ function App() {
     }
   };
 
-  // Handle route cancellation
-  const handleCancelRoute = () => {
+  // Handle route cancellation - preserves completed locations and stats
+  const handleCancelRoute = async () => {
     setIsTrackingRoute(false);
     setActiveRoute(null);
     setCurrentRouteIndex(0);
+    setCurrentLegStartTime(null);
     resetTracking();
     
-    // Clear saved route from localStorage
-    try {
-      localStorage.removeItem('active_route_state');
-    } catch (e) {
-      // ignore
-    }
-    
-    // Log cancellation
+    // Clear active route but preserve today's completed stats
     if (currentUser) {
-      pushActivity(currentUser.username, 'Rota takibi iptal edildi');
+      await clearTeamStatus(currentUser.id);
+      pushActivity(currentUser.username, `Rota takibi iptal edildi (${todayCompletedCount} yer tamamlandı)`);
     }
   };
 
   // Handle arrival confirmation
   const handleArrivalConfirm = async () => {
     if (!currentUser || !currentTargetLocation) return;
+    
+    const arrivalTime = new Date();
+    
+    // Calculate travel time from last leg
+    let travelMinutes = 0;
+    if (currentLegStartTime) {
+      travelMinutes = calculateMinutesBetween(currentLegStartTime, arrivalTime);
+      setTotalTravelMinutes(prev => prev + travelMinutes);
+    }
+    
     confirmArrival();
     
     // Send notification
     notifyArrival(currentTargetLocation.name);
+    
+    // Update team status to "adreste" (at address) - includes route data for database persistence
+    if (activeRoute) {
+      const nextLoc = currentRouteIndex + 1 < activeRoute.length ? activeRoute[currentRouteIndex + 1] : null;
+      const workStartTime = new Date();
+      await updateTeamStatus({
+        userId: currentUser.id,
+        username: currentUser.username,
+        status: 'adreste',
+        currentLocationId: typeof currentTargetLocation.id === 'number' ? currentTargetLocation.id : parseInt(currentTargetLocation.id) || null,
+        currentLocationName: currentTargetLocation.name,
+        nextLocationName: nextLoc?.name ?? null,
+        totalRouteCount: activeRoute.length,
+        completedCount: currentRouteIndex,
+        currentLat: userLocation?.[0] ?? null,
+        currentLng: userLocation?.[1] ?? null,
+        activeRoute: activeRoute,
+        currentRouteIndex: currentRouteIndex,
+        isWorking: true,
+        workStartTime: workStartTime,
+        totalTravelMinutes: totalTravelMinutes + travelMinutes,
+        completedLocations: completedLocations
+      });
+    }
     
     // Log arrival to database
     await logArrival(
       currentUser.username,
       currentTargetLocation.id,
       currentTargetLocation.name,
-      new Date()
+      arrivalTime
     );
 
     // Refresh activities
@@ -487,6 +555,27 @@ function App() {
     if (!result) return;
 
     const endTime = new Date();
+    const workMinutes = result.duration;
+    
+    // Calculate travel time for this location (time between route start or last completion and arrival)
+    const travelMinutesForThisLeg = currentLegStartTime && result.startTime 
+      ? calculateMinutesBetween(currentLegStartTime, result.startTime)
+      : 0;
+    
+    // Add to completed locations list
+    const completedLocationInfo: CompletedLocationInfo = {
+      id: currentTargetLocation.id,
+      name: currentTargetLocation.name,
+      arrivedAt: result.startTime.toISOString(),
+      completedAt: endTime.toISOString(),
+      workDurationMinutes: workMinutes,
+      travelDurationMinutes: travelMinutesForThisLeg
+    };
+    
+    const updatedCompletedLocations = [...completedLocations, completedLocationInfo];
+    setCompletedLocations(updatedCompletedLocations);
+    setTotalWorkMinutes(prev => prev + workMinutes);
+    setTodayCompletedCount(prev => prev + 1);
     
     // Send notification
     notifyCompletion(currentTargetLocation.name, result.duration);
@@ -507,22 +596,60 @@ function App() {
       const nextLocation = activeRoute[nextIndex];
       setCurrentRouteIndex(nextIndex);
       
+      // Set leg start time for next location (for travel time calculation)
+      const legStartTime = new Date();
+      setCurrentLegStartTime(legStartTime);
+      
       // Notify about next location
       notifyNextLocation(nextLocation.name, nextIndex + 1, activeRoute.length);
+      
+      // Update team status: moving to next location (includes route data)
+      const futureNext = nextIndex + 1 < activeRoute.length ? activeRoute[nextIndex + 1] : null;
+      await updateTeamStatus({
+        userId: currentUser.id,
+        username: currentUser.username,
+        status: 'yolda',
+        currentLocationId: typeof nextLocation.id === 'number' ? nextLocation.id : parseInt(nextLocation.id) || null,
+        currentLocationName: nextLocation.name,
+        nextLocationName: futureNext?.name ?? null,
+        totalRouteCount: activeRoute.length,
+        completedCount: nextIndex,
+        currentLat: userLocation?.[0] ?? null,
+        currentLng: userLocation?.[1] ?? null,
+        activeRoute: activeRoute,
+        currentRouteIndex: nextIndex,
+        isWorking: false,
+        workStartTime: null,
+        completedLocations: updatedCompletedLocations,
+        currentLegStartTime: legStartTime,
+        totalTravelMinutes: totalTravelMinutes,
+        totalWorkMinutes: totalWorkMinutes + workMinutes,
+        todayCompletedCount: todayCompletedCount + 1
+      });
     } else {
       // Route completed
       notifyRouteCompleted();
       setIsTrackingRoute(false);
       setActiveRoute(null);
       setCurrentRouteIndex(0);
+      setCurrentLegStartTime(null);
       resetTracking();
       
-      // Clear saved route from localStorage
-      try {
-        localStorage.removeItem('active_route_state');
-      } catch (e) {
-        // ignore
-      }
+      // Update with final stats before clearing route
+      await updateTeamStatus({
+        userId: currentUser.id,
+        username: currentUser.username,
+        status: 'idle',
+        totalRouteCount: 0,
+        completedCount: 0,
+        completedLocations: updatedCompletedLocations,
+        totalTravelMinutes: totalTravelMinutes,
+        totalWorkMinutes: totalWorkMinutes + workMinutes,
+        todayCompletedCount: todayCompletedCount + 1
+      });
+      
+      // Clear active route but preserve stats
+      await clearTeamStatus(currentUser.id);
     }
 
     // Refresh activities
@@ -841,15 +968,18 @@ function App() {
     <>
       <VersionChecker />
       <Routes>
-        <Route path="/login" element={<LoginPage onLogin={(user) => {
+        <Route path="/login" element={<LoginPage onLogin={async (user) => {
         // Accept 'admin', 'editor', 'viewer' (case-insensitive) or default to 'user'
         const r = String(user.role || '').toLowerCase();
         const role = r === 'admin' ? 'admin' : (r === 'editor' ? 'editor' : (r === 'viewer' ? 'viewer' : 'user'));
         setUserRole(role);
         setCurrentUser(user);
         // persist session
-        try { localStorage.setItem('app_session_v1', JSON.stringify({ user, role })); } catch (e) { }
+        try { localStorage.setItem('app_session_v1', JSON.stringify({ user, role })); } catch (_e) { }
         pushActivity(user.username, 'Giriş yaptı');
+        
+        // For editor users, route restoration happens automatically via useEffect on currentUser change
+        // We don't set idle status here to avoid overwriting any existing active route
       }} />} />
       <Route path="/*" element={
         <RequireAuth>
@@ -963,6 +1093,17 @@ function App() {
                         >
                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
                         </button>
+                        
+                        {/* Team Panel Button - Admin only */}
+                        {userRole === 'admin' && (
+                          <button
+                            onClick={() => setIsTeamPanelOpen(true)}
+                            className="flex items-center justify-center w-10 h-10 bg-purple-600 text-white rounded-full hover:bg-purple-700 shadow-sm hover:shadow-md transition-all duration-200"
+                            title="Ekip Durumu"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                          </button>
+                        )}
                       </div>
                     )}
 
@@ -1130,6 +1271,17 @@ function App() {
                             Rota Oluştur
                           </button>
                         </div>
+                        
+                        {/* Team Panel Button - Admin only (mobile drawer) */}
+                        {userRole === 'admin' && (
+                          <button
+                            onClick={() => { setIsTeamPanelOpen(true); setDrawerOpen(false); }}
+                            className="w-full mt-2 px-3 py-2 bg-purple-600 text-white rounded-md text-sm font-medium hover:bg-purple-700 shadow-sm flex items-center justify-center gap-2"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                            Ekip Durumu
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1244,13 +1396,42 @@ function App() {
                 locations={allLocations}
                 regions={locations}
                 userLocation={userLocation}
-                onStartRoute={(route: Location[]) => {
+                onStartRoute={async (route: Location[]) => {
+                  const routeStartTime = new Date();
                   setActiveRoute(route);
                   setCurrentRouteIndex(0);
                   setIsTrackingRoute(true);
+                  setCurrentLegStartTime(routeStartTime);
                   setView('map');
                   // Bildirim: rota başlatıldı
                   notifyRouteStarted(currentUser?.username ?? null, route.length);
+                  
+                  // Update team status: route started, going to first location
+                  if (currentUser && route.length > 0) {
+                    const firstLocation = route[0];
+                    const nextLocation = route.length > 1 ? route[1] : null;
+                    await updateTeamStatus({
+                      userId: currentUser.id,
+                      username: currentUser.username,
+                      status: 'yolda',
+                      currentLocationId: typeof firstLocation.id === 'number' ? firstLocation.id : parseInt(firstLocation.id) || null,
+                      currentLocationName: firstLocation.name,
+                      nextLocationName: nextLocation?.name ?? null,
+                      totalRouteCount: route.length,
+                      completedCount: 0,
+                      currentLat: userLocation?.[0] ?? null,
+                      currentLng: userLocation?.[1] ?? null,
+                      activeRoute: route,
+                      currentRouteIndex: 0,
+                      isWorking: false,
+                      workStartTime: null,
+                      currentLegStartTime: routeStartTime,
+                      completedLocations: completedLocations,
+                      totalTravelMinutes: totalTravelMinutes,
+                      totalWorkMinutes: totalWorkMinutes,
+                      todayCompletedCount: todayCompletedCount
+                    });
+                  }
                   
                   // Focus on first location
                   if (route.length > 0) {
@@ -1260,6 +1441,16 @@ function App() {
                   setTimeout(() => {
                     setIsRouteModalOpen(false);
                   }, 100);
+                }}
+              />
+
+              {/* Team Panel */}
+              <TeamPanel
+                isOpen={isTeamPanelOpen}
+                onClose={() => setIsTeamPanelOpen(false)}
+                onFocusMember={(_lat: number, _lng: number) => {
+                  // Could focus map on team member location in future
+                  setIsTeamPanelOpen(false);
                 }}
               />
 

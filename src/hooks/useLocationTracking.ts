@@ -50,6 +50,17 @@ export const useLocationTracking = ({
     workStartTime: initialWorkState?.workStartTime || null
   });
 
+  // Update tracking state when initialWorkState changes (e.g., restored from database)
+  useEffect(() => {
+    if (initialWorkState) {
+      setTrackingState(prev => ({
+        ...prev,
+        isWorking: initialWorkState.isWorking,
+        workStartTime: initialWorkState.workStartTime
+      }));
+    }
+  }, [initialWorkState]);
+
   // GPS watching removed - position is now received from parent component
   // This prevents constant re-renders caused by continuous geolocation updates
 
