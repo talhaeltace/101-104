@@ -93,7 +93,7 @@ function App() {
     targetLocation: currentTargetLocation,
     proximityThreshold: 100,
     userPosition: userLocation,
-    testMode: true,
+    testMode: false,
     initialWorkState
   });
 
