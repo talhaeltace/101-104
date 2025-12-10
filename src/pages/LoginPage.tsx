@@ -2,9 +2,10 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import LoginForm from '../components/LoginForm';
 import { MapPin } from 'lucide-react';
+import type { AuthUser } from '../lib/authUser';
 
 interface Props {
-  onLogin: (user: { id: string; username: string; role: string }) => void;
+  onLogin: (user: AuthUser) => void;
 }
 
 const LoginPage: React.FC<Props> = ({ onLogin }) => {

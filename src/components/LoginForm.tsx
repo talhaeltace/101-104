@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
+import type { AuthUser } from '../lib/authUser';
 import { User, Lock, LogIn, Loader2, UserPlus, Mail, ArrowLeft } from 'lucide-react';
 
 interface Props {
-  onSuccess: (user: { id: string; username: string; role: string }) => void;
+  onSuccess: (user: AuthUser) => void;
   onCancel: () => void;
 }
 
@@ -322,8 +323,8 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
 
             <div className="mt-4 p-3 bg-blue-50 rounded-lg">
               <p className="text-xs text-blue-700 text-center">
-                📋 Kayıt olduğunuzda <strong>görüntüleme yetkisi</strong> ile hesabınız oluşturulur. 
-                Düzenleme yetkisi için yönetici ile iletişime geçin.
+                📋 Kayıt olduğunuzda hesabınız <strong>herhangi bir yetki olmadan</strong> oluşturulur. 
+                Görüntüleme ve diğer tüm yetkiler için yönetici ile iletişime geçin.
               </p>
             </div>
           </>

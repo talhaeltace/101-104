@@ -53,10 +53,13 @@ export interface UserRouteData {
 
 /**
  * Update team status in Supabase (includes route data and detailed tracking)
+ * Has fallback for old DB schema without detailed tracking columns
  */
 export async function updateTeamStatus(update: TeamStatusUpdate): Promise<boolean> {
   try {
     console.log('Updating team status:', update.status, 'route length:', update.activeRoute?.length ?? 0);
+    
+    // Try with new parameters first (detailed tracking)
     const { data, error } = await supabase.rpc('update_team_status', {
       p_user_id: update.userId,
       p_username: update.username,
@@ -80,6 +83,16 @@ export async function updateTeamStatus(update: TeamStatusUpdate): Promise<boolea
     });
 
     if (error) {
+      // If error mentions unknown parameters, try with old schema (fallback)
+      if (error.message?.includes('p_completed_locations') || 
+          error.message?.includes('p_current_leg_start_time') ||
+          error.message?.includes('p_total_travel') ||
+          error.message?.includes('p_total_work') ||
+          error.message?.includes('p_today_completed') ||
+          error.code === '42883') { // function does not exist with those params
+        console.warn('DB schema outdated, using fallback without detailed tracking');
+        return await updateTeamStatusLegacy(update);
+      }
       console.error('Failed to update team status:', error, 'params:', { userId: update.userId, status: update.status });
       return false;
     }
@@ -88,6 +101,46 @@ export async function updateTeamStatus(update: TeamStatusUpdate): Promise<boolea
     return data?.success === true;
   } catch (err) {
     console.error('Team status update error:', err);
+    // Try legacy as last resort
+    try {
+      return await updateTeamStatusLegacy(update);
+    } catch {
+      return false;
+    }
+  }
+}
+
+/**
+ * Legacy update for old DB schema without detailed tracking columns
+ */
+async function updateTeamStatusLegacy(update: TeamStatusUpdate): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.rpc('update_team_status', {
+      p_user_id: update.userId,
+      p_username: update.username,
+      p_status: update.status,
+      p_current_location_id: update.currentLocationId ?? null,
+      p_current_location_name: update.currentLocationName ?? null,
+      p_next_location_name: update.nextLocationName ?? null,
+      p_total_route_count: update.totalRouteCount ?? 0,
+      p_completed_count: update.completedCount ?? 0,
+      p_current_lat: update.currentLat ?? null,
+      p_current_lng: update.currentLng ?? null,
+      p_active_route: update.activeRoute ?? null,
+      p_current_route_index: update.currentRouteIndex ?? 0,
+      p_is_working: update.isWorking ?? false,
+      p_work_start_time: update.workStartTime?.toISOString() ?? null
+    });
+
+    if (error) {
+      console.error('Legacy update failed:', error);
+      return false;
+    }
+    
+    console.log('Legacy team status updated:', data);
+    return data?.success === true;
+  } catch (err) {
+    console.error('Legacy team status error:', err);
     return false;
   }
 }

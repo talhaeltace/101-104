@@ -15,6 +15,9 @@ interface MapComponentProps {
   currentRouteIndex?: number; // Current location index in route
   userLocation?: [number, number] | null; // User's current location for distance calculation
   calculateDistance?: (lat1: number, lon1: number, lat2: number, lon2: number) => number;
+  // When true, hide completion overlay/legend and show a neutral
+  // "all green" map without per-region completion colors.
+  viewRestricted?: boolean;
 }
 
 const MapComponent: React.FC<MapComponentProps> = ({
@@ -28,7 +31,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
   activeRoute = null,
   currentRouteIndex = 0,
   userLocation = null,
-  calculateDistance
+  calculateDistance,
+  viewRestricted = false
 }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<HTMLDivElement>(null);
@@ -125,9 +129,13 @@ const MapComponent: React.FC<MapComponentProps> = ({
       if (selectedRegion !== 0) {
         locations.forEach((location) => {
         // Renk mantığı: Devreye alınmış > Konfigüre edilmiş > Hiçbiri
+        // Kısıtlı görüntüleme modunda (viewRestricted) tüm marker'lar yeşil
+        // görünür; durum bilgisi renkle gösterilmez.
         let markerClass = 'inactive'; // Varsayılan kırmızı
-        
-        if (location.details.isActive) {
+
+        if (viewRestricted) {
+          markerClass = 'active';
+        } else if (location.details.isActive) {
           markerClass = 'active'; // Yeşil - en yüksek öncelik
         } else if (location.details.isConfigured) {
           markerClass = 'configured'; // Sarı - orta öncelik
@@ -318,7 +326,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
     };
 
     updateMarkers();
-  }, [locations, onLocationSelect, focusLocation]);
+  }, [locations, onLocationSelect, focusLocation, viewRestricted]);
 
   // Draw active route line on map
   useEffect(() => {
@@ -618,8 +626,14 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
         // choose color based on region id (deterministic)
         const baseHue = (region.id * 47) % 360;
-        const fillColor = `hsl(${baseHue} 70% 60% / 0.22)`;
-        const strokeColor = `hsl(${baseHue} 70% 40%)`;
+        let fillColor = `hsl(${baseHue} 70% 60% / 0.22)`;
+        let strokeColor = `hsl(${baseHue} 70% 40%)`;
+
+        // Kısıtlı modda tüm bölgeler aynı nötr yeşil tonda olsun
+        if (viewRestricted) {
+          fillColor = 'rgba(16, 185, 129, 0.22)';
+          strokeColor = '#059669';
+        }
 
         const isSelected = selectedRegion !== 0 && region.id === selectedRegion;
 
@@ -681,7 +695,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
       labelsRef.current.forEach(l => mapInstance.current && mapInstance.current.removeLayer(l));
       labelsRef.current = [];
     };
-  }, [selectedRegion, regions]);
+  }, [selectedRegion, regions, viewRestricted]);
 
   // If using inline SVG (svgRef), wire clicks on elements with data-region attributes
   useEffect(() => {
@@ -718,46 +732,49 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
       const regionAttr = target.getAttribute('data-region') || target.dataset.region;
       // Bölge istatistiklerine göre fareyle üzerine gelme rengini hesaplayın ve uygulayın (yapılandırılmış / etkin)
-      try {
-        if (regionAttr && regions) {
-          const regionId = Number(regionAttr);
-          const regionObj = regions.find(r => r.id === regionId);
-          if (regionObj && regionObj.locations && regionObj.locations.length > 0) {
-            const total = regionObj.locations.length;
-            const configuredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured).length;
-            const activeConfiguredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured && l.details.isActive).length;
+      // Kısıtlı modda, istatistiğe göre renk değiştirmeyip sadece mevcut yeşil tonu koruyoruz.
+      if (!viewRestricted) {
+        try {
+          if (regionAttr && regions) {
+            const regionId = Number(regionAttr);
+            const regionObj = regions.find(r => r.id === regionId);
+            if (regionObj && regionObj.locations && regionObj.locations.length > 0) {
+              const total = regionObj.locations.length;
+              const configuredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured).length;
+              const activeConfiguredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured && l.details.isActive).length;
 
-            // Fareyle üzerine gelme rengine karar verin: çok sayıda etkin+yapılandırılmışsa yeşil, bazıları yapılandırılmışsa turuncu, değilse kırmızı
-            let hoverFill = '#814011ff'; // amber default
-            let hoverStroke = '#612f09ff';
-            if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.7) { // yüzde 70'den fazlası aktif ve konfigüre
-              hoverFill = '#085f42ff'; // green
-              hoverStroke = '#053122ff';
-            }
-            else if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.4) {
-              hoverFill = '#10b981';
-              hoverStroke = '#059669';
-            }
-            else if (configuredCount === 0) {
-              hoverFill = '#ef4444'; // red
-              hoverStroke = '#b91c1c';
-            }
+              // Fareyle üzerine gelme rengine karar verin: çok sayıda etkin+yapılandırılmışsa yeşil, bazıları yapılandırılmışsa turuncu, değilse kırmızı
+              let hoverFill = '#814011ff'; // amber default
+              let hoverStroke = '#612f09ff';
+              if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.7) { // yüzde 70'den fazlası aktif ve konfigüre
+                hoverFill = '#085f42ff'; // green
+                hoverStroke = '#053122ff';
+              }
+              else if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.4) {
+                hoverFill = '#10b981';
+                hoverStroke = '#059669';
+              }
+              else if (configuredCount === 0) {
+                hoverFill = '#ef4444'; // red
+                hoverStroke = '#b91c1c';
+              }
 
-            // store original fill/stroke so we can restore on mouseleave
-            if (!target.dataset.originalFill) target.dataset.originalFill = (target.getAttribute('fill') || '');
-            if (!target.dataset.originalStroke) target.dataset.originalStroke = (target.getAttribute('stroke') || '');
+              // store original fill/stroke so we can restore on mouseleave
+              if (!target.dataset.originalFill) target.dataset.originalFill = (target.getAttribute('fill') || '');
+              if (!target.dataset.originalStroke) target.dataset.originalStroke = (target.getAttribute('stroke') || '');
 
-            // apply hover colors
-            try {
-              target.setAttribute('fill', hoverFill);
-              if (hoverStroke) target.setAttribute('stroke', hoverStroke);
-              (target as HTMLElement).style.filter = 'drop-shadow(0 6px 18px rgba(0,0,0,0.9)) saturate(120%)';
-              (target as HTMLElement).style.opacity = '0.98';
-            } catch (e) { console.debug('MapComponent: failed to apply hover attributes to svg element', e); }
+              // apply hover colors
+              try {
+                target.setAttribute('fill', hoverFill);
+                if (hoverStroke) target.setAttribute('stroke', hoverStroke);
+                (target as HTMLElement).style.filter = 'drop-shadow(0 6px 18px rgba(0,0,0,0.9)) saturate(120%)';
+                (target as HTMLElement).style.opacity = '0.98';
+              } catch (e) { console.debug('MapComponent: failed to apply hover attributes to svg element', e); }
+            }
           }
+        } catch (err) {
+          // ignore
         }
-      } catch (err) {
-        // ignore
       }
 
       // label logic (human-friendly names)
@@ -915,23 +932,30 @@ const MapComponent: React.FC<MapComponentProps> = ({
         const regionObj = regions.find(r => r.id === regionId);
         if (!regionObj || !regionObj.locations || regionObj.locations.length === 0) return;
 
-        const total = regionObj.locations.length;
-        const configuredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured).length;
-        const activeConfiguredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured && l.details.isActive).length;
-
         let defaultFill = '#814011ff';
         let defaultStroke = '#612f09ff';
-        if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.7) {
-          defaultFill = '#085f42ff';
-          defaultStroke = '#053122ff';
-        }
-        else if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.4) {
+
+        if (viewRestricted) {
+          // Kısıtlı mod: tüm bölgeler aynı yeşil renkte
           defaultFill = '#10b981';
           defaultStroke = '#059669';
-        }
-         else if (configuredCount === 0) {
-          defaultFill = '#ef4444';
-          defaultStroke = '#b91c1c';
+        } else {
+          const total = regionObj.locations.length;
+          const configuredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured).length;
+          const activeConfiguredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured && l.details.isActive).length;
+
+          if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.7) {
+            defaultFill = '#085f42ff';
+            defaultStroke = '#053122ff';
+          }
+          else if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.4) {
+            defaultFill = '#10b981';
+            defaultStroke = '#059669';
+          }
+          else if (configuredCount === 0) {
+            defaultFill = '#ef4444';
+            defaultStroke = '#b91c1c';
+          }
         }
 
         el.dataset.computedFill = defaultFill;
@@ -973,7 +997,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
       mo.disconnect();
       labelEl.remove();
     };
-  }, [onRegionSelect, regions]);
+  }, [onRegionSelect, regions, viewRestricted]);
 
   // Highlight selected region on the inline SVG by adding a class .svg-region--selected
   useEffect(() => {
@@ -1047,6 +1071,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
   return (
     <div className="relative w-full h-full">
       {/* Deployment summary overlay (top-right) - collapsible on small screens */}
+      {!viewRestricted && (
       <div style={{ position: 'absolute', right: 8, bottom: 8 }}>
         {overlayOpen ? (
           <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 8, boxShadow: '0 6px 18px rgba(0,0,0,0.12)', padding: '8px 10px', minWidth: 270, display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -1090,6 +1115,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
           </div>
         )}
       </div>
+      )}
       {/* SVG container: paste your <svg>...</svg> markup inside this div */}
       <div ref={svgRef} className="w-full h-full rounded-lg shadow-lg" style={{ overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <svg className="jss180 jss145" version="1.1" xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" viewBox="0 0 1000 424" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', maxWidth: '100%', maxHeight: '100%' }}>

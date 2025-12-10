@@ -22,10 +22,13 @@ import LocationTrackingOverlay from './components/LocationTrackingOverlay';
 import { VersionChecker } from './components/VersionChecker';
 import { useLocationTracking } from './hooks/useLocationTracking';
 import { logArrival, logCompletion } from './lib/activityLogger';
-import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted, notifyRouteStarted } from './lib/notifications';
+import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted, notifyRouteStarted, notifyPermissionsUpdated } from './lib/notifications';
+import type { AuthUser } from './lib/authUser';
+import { DEFAULT_PERMISSIONS } from './lib/userPermissions';
 import { supabase } from './lib/supabase';
 import LoginPage from './pages/LoginPage';
 import TeamPanel from './components/TeamPanel';
+import AdminPanel from './components/AdminPanel';
 import { updateTeamStatus, clearTeamStatus, getUserRoute, CompletedLocationInfo, calculateMinutesBetween } from './lib/teamStatus';
 import { Routes, Route, Navigate } from 'react-router-dom';
 
@@ -39,7 +42,10 @@ function App() {
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [userRole, setUserRole] = useState<'admin' | 'user' | 'editor' | 'viewer' | null>(null);
 
-  const [currentUser, setCurrentUser] = useState<{ id: string; username: string; role: string } | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+
+  // Admin Panel state
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
 
   const { locations, loading, error, updateLocation, createLocation, deleteLocation } = useLocations();
   const [isCreateMode, setIsCreateMode] = useState(false);
@@ -64,6 +70,18 @@ function App() {
   const [totalTravelMinutes, setTotalTravelMinutes] = useState<number>(0);
   const [totalWorkMinutes, setTotalWorkMinutes] = useState<number>(0);
   const [todayCompletedCount, setTodayCompletedCount] = useState<number>(0);
+
+  // Derived permission flags from current user + role
+  const baseRole = (userRole ?? 'user') as 'admin' | 'editor' | 'viewer' | 'user';
+  const rolePerms = DEFAULT_PERMISSIONS[baseRole] || DEFAULT_PERMISSIONS['user'];
+
+  const userCanView = (currentUser?.can_view ?? rolePerms.can_view) === true;
+  const userCanEdit = (currentUser?.can_edit ?? rolePerms.can_edit) === true;
+  const userCanCreate = (currentUser?.can_create ?? rolePerms.can_create) === true;
+  const userCanDelete = (currentUser?.can_delete ?? rolePerms.can_delete) === true;
+  const userCanExport = (currentUser?.can_export ?? rolePerms.can_export) === true;
+  const userCanRoute = (currentUser?.can_route ?? rolePerms.can_route) === true;
+  const userCanTeamView = (currentUser?.can_team_view ?? rolePerms.can_team_view) === true;
 
   // Haversine distance calculation in km (kept for future use, currently unused)
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -341,6 +359,86 @@ function App() {
     };
     restoreSession();
   }, []);
+
+  // Keep current user's role & permissions in sync with DB so admin
+  // permission changes are reflected without needing log out / log in.
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let isCancelled = false;
+
+    const fetchLatestUser = async (notifyOnChange: boolean) => {
+      try {
+        const { data, error } = await supabase
+          .from('app_users')
+          .select('id, username, role, full_name, email, can_view, can_edit, can_create, can_delete, can_export, can_route, can_team_view')
+          .eq('id', currentUser.id)
+          .maybeSingle();
+
+        if (isCancelled || error || !data) {
+          return;
+        }
+
+        const changed =
+          data.role !== currentUser.role ||
+          data.can_view !== currentUser.can_view ||
+          data.can_edit !== currentUser.can_edit ||
+          data.can_create !== currentUser.can_create ||
+          data.can_delete !== currentUser.can_delete ||
+          data.can_export !== currentUser.can_export ||
+          data.can_route !== currentUser.can_route ||
+          data.can_team_view !== currentUser.can_team_view;
+
+        if (!changed) return;
+
+        const nextUser: AuthUser = {
+          id: data.id,
+          username: data.username,
+          role: data.role,
+          full_name: data.full_name,
+          email: data.email,
+          can_view: data.can_view,
+          can_edit: data.can_edit,
+          can_create: data.can_create,
+          can_delete: data.can_delete,
+          can_export: data.can_export,
+          can_route: data.can_route,
+          can_team_view: data.can_team_view
+        };
+
+        // Normalize role and update both state and localStorage session
+        const r = String(nextUser.role || '').toLowerCase();
+        const role = r === 'admin' ? 'admin' : (r === 'editor' ? 'editor' : (r === 'viewer' ? 'viewer' : 'user'));
+
+        setCurrentUser(nextUser);
+        setUserRole(role);
+        try {
+          localStorage.setItem('app_session_v1', JSON.stringify({ user: nextUser, role }));
+        } catch (_e) {
+          // ignore
+        }
+
+        if (notifyOnChange) {
+          notifyPermissionsUpdated();
+        }
+      } catch (e) {
+        console.warn('Failed to refresh user permissions from DB', e);
+      }
+    };
+
+    // Initial check with notification enabled
+    fetchLatestUser(true);
+
+    // Periodic refresh without extra notifications (already synced)
+    const intervalId = window.setInterval(() => {
+      fetchLatestUser(false);
+    }, 15000); // 15 seconds
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [currentUser]);
 
   // Mobile drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1011,7 +1109,7 @@ function App() {
                   </div>
 
                   {/* Center: region selector - keeps centered and visible on all sizes */}
-                  <div className="flex-1 flex justify-center px-4 sm:px-8">
+                  <div className="flex-1 flex justify-center items-center gap-4 px-4 sm:px-8">
                     <div className="w-full max-w-xl transform transition-all duration-200 hover:scale-[1.01]">
                       <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} />
                     </div>
@@ -1025,20 +1123,22 @@ function App() {
                       </div>
                     )}
                     
-                    <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-full border border-gray-100">
+                    {userCanExport && (
+                      <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-full border border-gray-100">
                         <button onClick={handleExportExcel} className="p-2 text-gray-600 hover:text-green-600 hover:bg-white rounded-full transition-all duration-200" title="Excel'e Aktar">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M5 12h14"/></svg>
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M5 12h14"/></svg>
                         </button>
 
                         <button onClick={handleExportPDF} className="p-2 text-gray-600 hover:text-red-600 hover:bg-white rounded-full transition-all duration-200" title="PDF'e Aktar">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 8v8M8 12h8"/></svg>
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 8v8M8 12h8"/></svg>
                         </button>
-                    </div>
+                      </div>
+                    )}
 
-                    {/* Admin actions visible on desktop */}
-                    {(userRole === 'admin' || userRole === 'editor') && (
+                    {/* Admin / management actions visible on desktop */}
+                    {(userCanCreate || userCanRoute || userCanTeamView || userRole === 'admin') && (
                       <div className="flex items-center gap-2">
-                        {userRole === 'admin' && (
+                        {userCanCreate && (
                           <button
                             onClick={() => {
                               const template: Location = {
@@ -1086,22 +1186,35 @@ function App() {
                           </button>
                         )}
 
-                        <button
-                          onClick={() => setIsRouteModalOpen(true)}
-                          className="flex items-center justify-center w-10 h-10 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 shadow-sm hover:shadow-md transition-all duration-200"
-                          title="Rota Oluştur"
-                        >
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
-                        </button>
+                        {userCanRoute && (
+                          <button
+                            onClick={() => setIsRouteModalOpen(true)}
+                            className="flex items-center justify-center w-10 h-10 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 shadow-sm hover:shadow-md transition-all duration-200"
+                            title="Rota Oluştur"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                          </button>
+                        )}
                         
-                        {/* Team Panel Button - Admin only */}
-                        {userRole === 'admin' && (
+                        {/* Team Panel Button - based on can_team_view */}
+                        {userCanTeamView && (
                           <button
                             onClick={() => setIsTeamPanelOpen(true)}
                             className="flex items-center justify-center w-10 h-10 bg-purple-600 text-white rounded-full hover:bg-purple-700 shadow-sm hover:shadow-md transition-all duration-200"
                             title="Ekip Durumu"
                           >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                          </button>
+                        )}
+                        
+                        {/* Admin Panel Button - Admin only */}
+                        {userRole === 'admin' && (
+                          <button
+                            onClick={() => setIsAdminPanelOpen(true)}
+                            className="flex items-center justify-center w-10 h-10 bg-red-600 text-white rounded-full hover:bg-red-700 shadow-sm hover:shadow-md transition-all duration-200"
+                            title="Admin Paneli"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                           </button>
                         )}
                       </div>
@@ -1168,13 +1281,15 @@ function App() {
                         <ActivityWidget inline={true} lastUpdated={lastUpdated} activities={activities} onOpenLocation={openLocationByName} />
                       </div>
                     )}
-                    <div>
-                      <div className="text-sm font-medium mb-2">Dışa Aktar</div>
-                      <div className="flex gap-2">
-                        <button onClick={() => { handleExportExcel(); setDrawerOpen(false); }} className="flex-1 px-3 py-2 bg-white border rounded-md text-sm shadow-sm">Excel'e Aktar</button>
-                        <button onClick={() => { handleExportPDF(); setDrawerOpen(false); }} className="flex-1 px-3 py-2 bg-white border rounded-md text-sm shadow-sm">PDF'e Aktar</button>
+                    {userCanExport && (
+                      <div>
+                        <div className="text-sm font-medium mb-2">Dışa Aktar</div>
+                        <div className="flex gap-2">
+                          <button onClick={() => { handleExportExcel(); setDrawerOpen(false); }} className="flex-1 px-3 py-2 bg-white border rounded-md text-sm shadow-sm">Excel'e Aktar</button>
+                          <button onClick={() => { handleExportPDF(); setDrawerOpen(false); }} className="flex-1 px-3 py-2 bg-white border rounded-md text-sm shadow-sm">PDF'e Aktar</button>
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     <div>
                       <div className="text-sm font-medium mb-2">Görünüm</div>
@@ -1212,11 +1327,11 @@ function App() {
                       )}
                     </div>
 
-                    {(userRole === 'admin' || userRole === 'editor') && (
+                    {(userCanCreate || userCanRoute || userCanTeamView || userRole === 'admin') && (
                       <div>
                         <div className="text-sm font-medium mb-2">Yönetim</div>
                         <div className="flex gap-2">
-                          {userRole === 'admin' && (
+                          {userCanCreate && (
                             <button
                               onClick={() => {
                                 const template: Location = {
@@ -1264,22 +1379,35 @@ function App() {
                             </button>
                           )}
 
-                          <button
-                            onClick={() => { setIsRouteModalOpen(true); setDrawerOpen(false); }}
-                            className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 shadow-sm"
-                          >
-                            Rota Oluştur
-                          </button>
+                          {userCanRoute && (
+                            <button
+                              onClick={() => { setIsRouteModalOpen(true); setDrawerOpen(false); }}
+                              className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 shadow-sm"
+                            >
+                              Rota Oluştur
+                            </button>
+                          )}
                         </div>
                         
-                        {/* Team Panel Button - Admin only (mobile drawer) */}
-                        {userRole === 'admin' && (
+                        {/* Team Panel Button - based on can_team_view (mobile drawer) */}
+                        {userCanTeamView && (
                           <button
                             onClick={() => { setIsTeamPanelOpen(true); setDrawerOpen(false); }}
                             className="w-full mt-2 px-3 py-2 bg-purple-600 text-white rounded-md text-sm font-medium hover:bg-purple-700 shadow-sm flex items-center justify-center gap-2"
                           >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                             Ekip Durumu
+                          </button>
+                        )}
+
+                        {/* Admin Panel Button - Admin only (mobile drawer) */}
+                        {userRole === 'admin' && (
+                          <button
+                            onClick={() => { setIsAdminPanelOpen(true); setDrawerOpen(false); }}
+                            className="w-full mt-2 px-3 py-2 bg-red-600 text-white rounded-md text-sm font-medium hover:bg-red-700 shadow-sm flex items-center justify-center gap-2"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                            Admin Paneli
                           </button>
                         )}
                       </div>
@@ -1291,18 +1419,74 @@ function App() {
 
             {/* main: pad top so content doesn't hide under fixed header */}
             <main className="pt-20 sm:pt-24 w-full px-4 sm:px-6 lg:px-8 pb-20">
-              {/* Mobile compact stats (show parentheses with selected counts) */}
-              <div className="mb-4">
-                <div className="grid grid-cols-1 gap-4">
-                  <LocationStats locations={allLocations} selectedRegionLocations={currentLocations} />
+              {userCanView && (
+                <div className="mb-4">
+                  <div className="grid grid-cols-1 gap-4">
+                    <LocationStats locations={allLocations} selectedRegionLocations={currentLocations} />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Content */}
-              {view === 'map' ? (
+              {userCanView ? (
+                view === 'map' ? (
+                  <div className="space-y-4">
+                    <div
+                      className="bg-black rounded-t-lg shadow-md border border-gray-200 w-full overflow-hidden"
+                      style={{ minHeight: 'calc(var(--vh, 1vh) * 40)' }}
+                    >
+                      <div className="map-responsive w-full">
+                        <MapComponent
+                          regions={locations}
+                          locations={currentLocations}
+                          selectedRegion={selectedRegion}
+                          onLocationSelect={handleLocationSelect}
+                          onRegionSelect={(id) => setSelectedRegion(id)}
+                          focusLocation={focusLocation}
+                          setFocusLocation={setFocusLocation}
+                          activeRoute={activeRoute}
+                          currentRouteIndex={currentRouteIndex}
+                          userLocation={userLocation}
+                          calculateDistance={calculateDistance}
+                          viewRestricted={!userCanView}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-2">
+                      <LocationSelector
+                        locations={currentLocations}
+                        regions={locations}
+                        selectedRegion={selectedRegion}
+                        selectedLocation={selectedLocation}
+                        onLocationSelect={handleLocationSelect}
+                        onShowDetails={handleShowDetails}
+                        onLocationDoubleClick={handleLocationDoubleClick}
+                        statusFilter={statusFilter}
+                        onStatusFilterChange={setStatusFilter}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-lg shadow-md border border-gray-200 h-[600px]">
+                    <LocationList
+                      locations={currentLocations}
+                      onLocationSelect={handleLocationSelect}
+                      onShowDetails={handleShowDetails}
+                      onLocationDoubleClick={(location) => {
+                        setView('map');
+                        setFocusLocation(location);
+                        setSelectedLocation(location);
+                      }}
+                    />
+                  </div>
+                )
+              ) : (
                 <div className="space-y-4">
-         <div className="bg-black rounded-t-lg shadow-md border border-gray-200 w-full overflow-hidden"
-           style={{ minHeight: 'calc(var(--vh, 1vh) * 40)' }}>
+                  <div
+                    className="bg-black rounded-t-lg shadow-md border border-gray-200 w-full overflow-hidden"
+                    style={{ minHeight: 'calc(var(--vh, 1vh) * 40)' }}
+                  >
                     <div className="map-responsive w-full">
                       <MapComponent
                         regions={locations}
@@ -1316,36 +1500,37 @@ function App() {
                         currentRouteIndex={currentRouteIndex}
                         userLocation={userLocation}
                         calculateDistance={calculateDistance}
+                        viewRestricted={!userCanView}
                       />
                     </div>
                   </div>
 
-                  <div className="mt-2">
-                    <LocationSelector
-                      locations={currentLocations}
-                      regions={locations}
-                      selectedRegion={selectedRegion}
-                      selectedLocation={selectedLocation}
-                      onLocationSelect={handleLocationSelect}
-                      onShowDetails={handleShowDetails}
-                      onLocationDoubleClick={handleLocationDoubleClick}
-                      statusFilter={statusFilter}
-                      onStatusFilterChange={setStatusFilter}
-                    />
+                  <div className="min-h-[30vh] flex items-center justify-center">
+                    <div className="bg-white rounded-xl shadow-md border border-gray-200 px-6 py-6 max-w-md text-center">
+                      <div className="mx-auto mb-3 w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                        <svg
+                          className="w-6 h-6"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                          />
+                        </svg>
+                      </div>
+                      <h2 className="text-lg font-semibold text-gray-800 mb-1">Görüntüleme yetkiniz yok</h2>
+                      <p className="text-sm text-gray-600">
+                        Bu hesap için lokasyonların detaylı listesi ve istatistikleri gizlendi.
+                        Lütfen yöneticinizle iletişime geçerek
+                        <span className="font-medium"> Görüntüle </span>
+                        yetkisini aktif etmelerini isteyin.
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div className="bg-white rounded-lg shadow-md border border-gray-200 h-[600px]">
-                  <LocationList
-                    locations={currentLocations}
-                    onLocationSelect={handleLocationSelect}
-                    onShowDetails={handleShowDetails}
-                    onLocationDoubleClick={(location) => {
-                      setView('map');
-                      setFocusLocation(location);
-                      setSelectedLocation(location);
-                    }}
-                  />
                 </div>
               )}
 
@@ -1355,7 +1540,7 @@ function App() {
                   location={selectedLocation}
                   isOpen={isEditModalOpen}
                   isCreate={isCreateMode}
-                  isAdmin={userRole === 'admin'}
+                  isAdmin={userCanDelete}
                   isEditor={userRole === 'editor'}
                   onClose={() => { setIsEditModalOpen(false); setIsCreateMode(false); }}
                   onSave={async (loc: Location) => {
@@ -1387,6 +1572,7 @@ function App() {
                   isAdmin={userRole === 'admin'}
                   isEditor={userRole === 'editor'}
                   isViewer={userRole === 'viewer'}
+                  canEdit={userCanEdit}
                 />
               )}
               {/* Route Builder Modal */}
@@ -1454,8 +1640,8 @@ function App() {
                 }}
               />
 
-              {/* Location Tracking Overlay */}
-              {activeRoute && activeRoute.length > 0 && (
+              {/* Location Tracking Overlay - only for users with view permission */}
+              {userCanView && activeRoute && activeRoute.length > 0 && (
                 <LocationTrackingOverlay
                   currentLocation={currentTargetLocation}
                   distanceToTarget={trackingState.distanceToTarget}
@@ -1465,6 +1651,14 @@ function App() {
                   onArrivalConfirm={handleArrivalConfirm}
                   onCompletionConfirm={handleCompletionConfirm}
                   onCancelRoute={handleCancelRoute}
+                />
+              )}
+
+              {/* Admin Panel Modal */}
+              {isAdminPanelOpen && currentUser && (
+                <AdminPanel
+                  currentUserId={currentUser.id}
+                  onClose={() => setIsAdminPanelOpen(false)}
                 />
               )}
             </main>

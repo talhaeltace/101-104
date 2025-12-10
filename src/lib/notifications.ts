@@ -96,3 +96,11 @@ export const notifyRouteStarted = (username: string | null, totalLocations: numb
     tag: 'route-started'
   });
 };
+
+// Permissions notifications
+export const notifyPermissionsUpdated = (): void => {
+  sendNotification('🔐 Yetkileriniz Güncellendi', {
+    body: 'Yönetici hesabınızdaki yetkileri güncelledi. Sayfayı yenilemeden yeni yetkileri hemen kullanabilirsiniz.',
+    tag: 'permissions-updated'
+  });
+};
