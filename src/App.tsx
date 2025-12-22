@@ -1,11 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
-import { Geolocation } from '@capacitor/geolocation';
 import { blobToBase64, saveAndShareFile, saveArrayBufferAndShare } from './lib/nativeFiles';
 import { Location } from './data/regions';
 import { useLocations } from './hooks/useLocations';
@@ -19,6 +18,7 @@ import LocationDetailsModal from './components/LocationDetailsModal';
 import RouteBuilderModal from './components/RouteBuilderModal';
 import ActivityWidget, { ActivityEntry } from './components/ActivityWidget';
 import LocationTrackingOverlay from './components/LocationTrackingOverlay';
+import TasksPanel from './components/TasksPanel';
 import { VersionChecker } from './components/VersionChecker';
 import { useLocationTracking } from './hooks/useLocationTracking';
 import { logArrival, logCompletion } from './lib/activityLogger';
@@ -30,6 +30,8 @@ import LoginPage from './pages/LoginPage';
 import TeamPanel from './components/TeamPanel';
 import AdminPanel from './components/AdminPanel';
 import { updateTeamStatus, clearTeamStatus, getUserRoute, CompletedLocationInfo, calculateMinutesBetween } from './lib/teamStatus';
+import { saveTrackingState, loadTrackingState, clearTrackingState, type RouteTrackingStorage } from './lib/trackingStorage';
+import { updateTaskStatus, type Task } from './lib/tasks';
 import { Routes, Route, Navigate } from 'react-router-dom';
 
 function App() {
@@ -37,6 +39,7 @@ function App() {
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
   const [focusLocation, setFocusLocation] = useState<Location | null>(null);
   const [view, setView] = useState<'map' | 'list'>('map');
+  const [mapMode, setMapMode] = useState<'lokasyon' | 'harita'>('lokasyon');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [detailsModalLocation, setDetailsModalLocation] = useState<Location | null>(null);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
@@ -53,6 +56,68 @@ function App() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
 
+  // Manual dismissal timestamps for the pulsing "recent work" highlight per region.
+  // If a newer activity happens after dismissal, the pulse will automatically re-appear.
+  const [dismissedWorkRegionAt, setDismissedWorkRegionAt] = useState<Record<number, number>>({});
+
+  // Map locationId -> regionId for fast lookups
+  const locationToRegionId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of (locations || []) as any[]) {
+      const rid = Number(r?.id);
+      const regionLocs = (r?.locations || []) as any[];
+      for (const l of regionLocs) {
+        if (l?.id != null && Number.isFinite(rid)) m.set(String(l.id), rid);
+      }
+    }
+    return m;
+  }, [locations]);
+
+  // Regions with recent work per user (last activity with location_id within 24h)
+  const activeWorkRegionIds = useMemo(() => {
+    const cutoffMs = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const latestByUser = new Map<string, ActivityEntry>();
+
+    // activities are loaded sorted desc by created_at; first hit per user is the latest
+    for (const a of activities) {
+      if (!a?.location_id) continue;
+      const u = String(a.user || '').trim();
+      if (!u) continue;
+      if (!latestByUser.has(u)) latestByUser.set(u, a);
+    }
+
+    // Track latest work timestamp per region (from per-user latest activity)
+    const regionLatestMs = new Map<number, number>();
+    latestByUser.forEach(a => {
+      const t = a?.time ? new Date(a.time).getTime() : NaN;
+      if (!Number.isFinite(t)) return;
+      if (now - t > cutoffMs) return; // stop pulsing if user inactive > 24h
+      const rid = locationToRegionId.get(String(a.location_id));
+      if (rid == null || !Number.isFinite(rid)) return;
+      const prev = regionLatestMs.get(rid);
+      if (prev == null || t > prev) regionLatestMs.set(rid, t);
+    });
+
+    // Apply manual dismiss: suppress only if dismissal is newer than (or equal to) latest work time
+    const out: number[] = [];
+    regionLatestMs.forEach((t, rid) => {
+      const dismissedAt = dismissedWorkRegionAt[rid];
+      if (dismissedAt != null && dismissedAt >= t) return;
+      out.push(rid);
+    });
+    return out;
+  }, [activities, locationToRegionId, dismissedWorkRegionAt]);
+
+  const dismissActiveWorkRegion = (regionId: number) => {
+    if (!Number.isFinite(regionId)) return;
+    setDismissedWorkRegionAt(prev => ({ ...prev, [regionId]: Date.now() }));
+  };
+
+  // Tasks
+  const [isTasksPanelOpen, setIsTasksPanelOpen] = useState(false);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+
   // Active route tracking state
   const [activeRoute, setActiveRoute] = useState<Location[] | null>(null);
   const [currentRouteIndex, setCurrentRouteIndex] = useState<number>(0);
@@ -60,6 +125,7 @@ function App() {
   
   // User's current location for distance calculation
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+  const [geoPermissionDenied, setGeoPermissionDenied] = useState<boolean>(false);
 
   // Initial work state for restoring from localStorage
   const [initialWorkState, setInitialWorkState] = useState<{ isWorking: boolean; workStartTime: Date | null } | undefined>(undefined);
@@ -71,54 +137,127 @@ function App() {
   const [totalWorkMinutes, setTotalWorkMinutes] = useState<number>(0);
   const [todayCompletedCount, setTodayCompletedCount] = useState<number>(0);
 
-  // Derived permission flags from current user + role
-  const baseRole = (userRole ?? 'user') as 'admin' | 'editor' | 'viewer' | 'user';
-  const rolePerms = DEFAULT_PERMISSIONS[baseRole] || DEFAULT_PERMISSIONS['user'];
+  // Effective permissions (DB values override role defaults)
+  const roleDefaults = useMemo(() => {
+    const key = (currentUser?.role ?? userRole ?? 'user') as keyof typeof DEFAULT_PERMISSIONS;
+    return DEFAULT_PERMISSIONS[key] ?? DEFAULT_PERMISSIONS.user;
+  }, [currentUser?.role, userRole]);
 
-  const userCanView = (currentUser?.can_view ?? rolePerms.can_view) === true;
-  const userCanEdit = (currentUser?.can_edit ?? rolePerms.can_edit) === true;
-  const userCanCreate = (currentUser?.can_create ?? rolePerms.can_create) === true;
-  const userCanDelete = (currentUser?.can_delete ?? rolePerms.can_delete) === true;
-  const userCanExport = (currentUser?.can_export ?? rolePerms.can_export) === true;
-  const userCanRoute = (currentUser?.can_route ?? rolePerms.can_route) === true;
-  const userCanTeamView = (currentUser?.can_team_view ?? rolePerms.can_team_view) === true;
+  const userCanView = typeof currentUser?.can_view === 'boolean' ? currentUser.can_view : roleDefaults.can_view;
+  const userCanEdit = typeof currentUser?.can_edit === 'boolean' ? currentUser.can_edit : roleDefaults.can_edit;
+  const userCanCreate = typeof currentUser?.can_create === 'boolean' ? currentUser.can_create : roleDefaults.can_create;
+  const userCanDelete = typeof currentUser?.can_delete === 'boolean' ? currentUser.can_delete : roleDefaults.can_delete;
+  const userCanExport = typeof currentUser?.can_export === 'boolean' ? currentUser.can_export : roleDefaults.can_export;
+  const userCanRoute = typeof currentUser?.can_route === 'boolean' ? currentUser.can_route : roleDefaults.can_route;
+  const userCanTeamView = typeof currentUser?.can_team_view === 'boolean' ? currentUser.can_team_view : roleDefaults.can_team_view;
 
-  // Haversine distance calculation in km (kept for future use, currently unused)
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
+  const currentTargetLocation = useMemo(() => {
+    if (!activeRoute || activeRoute.length === 0) return null;
+    const idx = Math.max(0, Math.min(currentRouteIndex, activeRoute.length - 1));
+    return activeRoute[idx] ?? null;
+  }, [activeRoute, currentRouteIndex]);
+
+  const { trackingState, confirmArrival, completeWork, resetTracking } = useLocationTracking({
+    targetLocation: currentTargetLocation,
+    userPosition: userLocation,
+    initialWorkState
+  });
+
+  const buildTrackingSnapshot = (): RouteTrackingStorage => {
+    return {
+      version: 2,
+      userId: currentUser?.id ?? undefined,
+      username: currentUser?.username ?? '',
+      activeTaskId: activeTaskId ?? null,
+      activeRoute,
+      currentRouteIndex,
+      isTrackingRoute,
+      trackingState: {
+        arrivalTime: trackingState.arrivalTime ? trackingState.arrivalTime.toISOString?.() ?? String(trackingState.arrivalTime) : null,
+        isWorking: trackingState.isWorking,
+        workStartTime: trackingState.workStartTime ? trackingState.workStartTime.toISOString?.() ?? String(trackingState.workStartTime) : null
+      },
+      currentLegStartTime: currentLegStartTime ? currentLegStartTime.toISOString() : null,
+      completedLocations,
+      totalTravelMinutes,
+      totalWorkMinutes,
+      todayCompletedCount,
+      savedAt: new Date().toISOString()
+    };
+  };
+
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    // Haversine distance in kilometers
+    const toRad = (v: number) => v * Math.PI / 180;
+    const R = 6371; // km
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
       Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   };
 
-  // Get current target location from active route
-  const currentTargetLocation = activeRoute && currentRouteIndex < activeRoute.length 
-    ? activeRoute[currentRouteIndex] 
-    : null;
-
-  // Use location tracking hook
-  const {
-    trackingState,
-    confirmArrival,
-    completeWork,
-    resetTracking
-  } = useLocationTracking({
-    targetLocation: currentTargetLocation,
-    proximityThreshold: 100,
-    userPosition: userLocation,
-    testMode: false,
-    initialWorkState
-  });
+  const trackingSnapshotRef = useRef<RouteTrackingStorage | null>(null);
+  useEffect(() => {
+    trackingSnapshotRef.current = buildTrackingSnapshot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentUser?.id,
+    currentUser?.username,
+    isTrackingRoute,
+    activeRoute,
+    currentRouteIndex,
+    trackingState.isWorking,
+    trackingState.workStartTime,
+    currentLegStartTime,
+    completedLocations,
+    totalTravelMinutes,
+    totalWorkMinutes,
+    todayCompletedCount,
+    activeTaskId
+  ]);
 
   // Restore route state from database on mount (when user is logged in)
   useEffect(() => {
     const loadRouteFromDb = async () => {
       if (!currentUser) return;
+
+      // Fast local restore first (helps when mobile browser discards tab/offline)
+      try {
+        const local = loadTrackingState();
+        const belongsToUser =
+          !!local &&
+          local.isTrackingRoute === true &&
+          Array.isArray(local.activeRoute) &&
+          local.activeRoute.length > 0 &&
+          ((local.userId && local.userId === currentUser.id) || (!local.userId && local.username === currentUser.username));
+
+        if (belongsToUser) {
+          const idx = Math.max(0, Math.min(local.currentRouteIndex || 0, (local.activeRoute?.length || 1) - 1));
+          setActiveRoute(local.activeRoute as any);
+          setCurrentRouteIndex(idx);
+          setIsTrackingRoute(true);
+          setActiveTaskId((local as any).activeTaskId ?? null);
+          setCompletedLocations((local.completedLocations || []) as any);
+          setCurrentLegStartTime(local.currentLegStartTime ? new Date(local.currentLegStartTime) : null);
+          setTotalTravelMinutes(typeof local.totalTravelMinutes === 'number' ? local.totalTravelMinutes : 0);
+          setTotalWorkMinutes(typeof local.totalWorkMinutes === 'number' ? local.totalWorkMinutes : 0);
+          setTodayCompletedCount(typeof local.todayCompletedCount === 'number' ? local.todayCompletedCount : 0);
+
+          setInitialWorkState({
+            isWorking: !!local.trackingState?.isWorking,
+            workStartTime: local.trackingState?.workStartTime ? new Date(local.trackingState.workStartTime) : null
+          });
+
+          const currentLoc = (local.activeRoute as any[])[idx] as any;
+          if (currentLoc) setFocusLocation(currentLoc);
+        }
+      } catch {
+        // ignore local restore errors
+      }
       
       try {
         console.log('Loading route from database for user:', currentUser.id);
@@ -127,8 +266,14 @@ function App() {
         
         if (routeData && routeData.activeRoute && Array.isArray(routeData.activeRoute) && routeData.activeRoute.length > 0) {
           console.log('Restoring route with', routeData.activeRoute.length, 'locations, index:', routeData.currentRouteIndex);
+          const safeIndex = (() => {
+            const n = routeData.activeRoute.length;
+            const raw = typeof routeData.currentRouteIndex === 'number' ? routeData.currentRouteIndex : Number(routeData.currentRouteIndex);
+            const idx = Number.isFinite(raw) ? raw : 0;
+            return Math.max(0, Math.min(idx, n - 1));
+          })();
           setActiveRoute(routeData.activeRoute);
-          setCurrentRouteIndex(routeData.currentRouteIndex || 0);
+          setCurrentRouteIndex(safeIndex);
           setIsTrackingRoute(true);
           // Restore work state
           if (routeData.isWorking !== undefined) {
@@ -145,12 +290,22 @@ function App() {
           setTodayCompletedCount(routeData.todayCompletedCount || 0);
           
           // Focus on current location
-          const currentLoc = routeData.activeRoute[routeData.currentRouteIndex || 0];
+          const currentLoc = routeData.activeRoute[safeIndex];
           if (currentLoc) {
             setFocusLocation(currentLoc);
           }
+
+          // Keep local snapshot aligned with DB for maximum stability.
+          const snap = trackingSnapshotRef.current;
+          if (snap) {
+            try { saveTrackingState(snap); } catch { /* ignore */ }
+          }
         } else {
           console.log('No active route found for user');
+
+          // DB explicitly says there is no active route; clear any stale local snapshot
+          try { clearTrackingState(); } catch { /* ignore */ }
+
           // Restore today's stats even if no active route
           if (routeData) {
             setCompletedLocations(routeData.completedLocations || []);
@@ -177,74 +332,198 @@ function App() {
     loadRouteFromDb();
   }, [currentUser, userRole]);
 
-  // Route state is now saved to database via updateTeamStatus calls
-  // No localStorage needed - each user's route is stored in team_status table
+  const startRoute = async (route: Location[], taskId?: string | null) => {
+    if (!currentUser || route.length === 0) return;
 
-  // Tracking state is managed silently; no console logging to avoid refresh-like noise
+    const routeStartTime = new Date();
+    setActiveRoute(route);
+    setCurrentRouteIndex(0);
+    setIsTrackingRoute(true);
+    setCurrentLegStartTime(routeStartTime);
+    setView('map');
 
-  // Get user's current location for distance calculations
-  // Initial position on mount, then update every 60 seconds when route is active
+    if (taskId) {
+      setActiveTaskId(taskId);
+      try { await updateTaskStatus(taskId, 'in_progress'); } catch { /* ignore */ }
+    } else {
+      setActiveTaskId(null);
+    }
+
+    notifyRouteStarted(currentUser.username, route.length);
+
+    const firstLocation = route[0];
+    const nextLocation = route.length > 1 ? route[1] : null;
+    await updateTeamStatus({
+      userId: currentUser.id,
+      username: currentUser.username,
+      status: 'yolda',
+      currentLocationId: typeof firstLocation.id === 'number' ? firstLocation.id : parseInt(firstLocation.id) || null,
+      currentLocationName: firstLocation.name,
+      nextLocationName: nextLocation?.name ?? null,
+      totalRouteCount: route.length,
+      completedCount: 0,
+      currentLat: userLocation?.[0] ?? null,
+      currentLng: userLocation?.[1] ?? null,
+      activeRoute: route,
+      currentRouteIndex: 0,
+      isWorking: false,
+      workStartTime: null,
+      currentLegStartTime: routeStartTime,
+      completedLocations,
+      totalTravelMinutes,
+      totalWorkMinutes,
+      todayCompletedCount
+    });
+
+    setFocusLocation(firstLocation);
+    setSelectedLocation(firstLocation);
+  };
+
+  // Persist route snapshot locally as a safety net (DB is still the main source-of-truth).
+  useEffect(() => {
+    // Debounce to avoid frequent localStorage writes.
+    const t = window.setTimeout(() => {
+      const snap = trackingSnapshotRef.current;
+      if (snap) {
+        saveTrackingState(snap);
+      }
+    }, 500);
+    return () => window.clearTimeout(t);
+  }, [
+    currentUser?.id,
+    isTrackingRoute,
+    activeRoute,
+    currentRouteIndex,
+    trackingState.isWorking,
+    trackingState.workStartTime,
+    currentLegStartTime,
+    completedLocations,
+    totalTravelMinutes,
+    totalWorkMinutes,
+    todayCompletedCount
+  ]);
+
+  // Tracking state is managed silently; local snapshot is saved to support resume
+
+  // Uygulama açılışında (sadece native'de) tek seferlik konum izni iste
   useEffect(() => {
     const platform = Capacitor.getPlatform();
     const isNativePlatform = platform !== 'web';
+    if (!isNativePlatform) return;
+    if (!navigator.geolocation) return;
+
+    try {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setGeoPermissionDenied(false);
+          setUserLocation([position.coords.latitude, position.coords.longitude]);
+        },
+        (err: any) => {
+          // Permission denied: avoid retry loops that keep prompting
+          if (err && err.code === 1) {
+            setGeoPermissionDenied(true);
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 8000,
+          maximumAge: 0
+        }
+      );
+    } catch {
+      // Beklenmeyen hata olursa yoksay
+    }
+  }, []);
+
+  // Get user's current location for distance calculations
+  // Initial position on mount, then keep updating while route is active.
+  // For smoother live tracking, prefer `watchPosition` during an active route.
+  useEffect(() => {
+    const platform = Capacitor.getPlatform();
+    const isNativePlatform = platform !== 'web';
+    let isMounted = true;
+    let watchId: number | null = null;
 
     const updateLocation = async () => {
+      if (!isMounted) return;
+      
       try {
-        if (isNativePlatform) {
-          const permission = await Geolocation.checkPermissions();
-          if (permission.location !== 'granted') {
-            const request = await Geolocation.requestPermissions();
-            if (request.location !== 'granted') {
-              return;
-            }
-          }
-          try {
-            const position = await Geolocation.getCurrentPosition({
-              enableHighAccuracy: true,
-              timeout: 8000,
-              maximumAge: 0
-            });
-            setUserLocation([position.coords.latitude, position.coords.longitude]);
-          } catch {
-            // ignore
-          }
-        } else {
-          if (!navigator.geolocation) return;
-          navigator.geolocation.getCurrentPosition(
-            (position) => {
+        if (!navigator.geolocation) return;
+
+        // If user denied location once on native, don't keep re-triggering prompts.
+        if (isNativePlatform && geoPermissionDenied) return;
+
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            if (isMounted) {
+              setGeoPermissionDenied(false);
               const newLocation: [number, number] = [position.coords.latitude, position.coords.longitude];
               setUserLocation(newLocation);
-            },
-            () => {
-              // ignore
-            },
-            {
-              enableHighAccuracy: true,
-              timeout: 8000,
-              maximumAge: 0
             }
-          );
-        }
+          },
+          (err: any) => {
+            if (isNativePlatform && err && err.code === 1) {
+              setGeoPermissionDenied(true);
+            }
+          },
+          {
+            enableHighAccuracy: true,
+            timeout: 8000,
+            // Keep this low so we get fresh-ish values for 100m detection
+            maximumAge: 2000
+          }
+        );
       } catch {
-        // ignore
+        // Any unexpected error - ignore silently
       }
     };
 
     // Get initial location
     updateLocation();
 
-    // Update every 60 seconds only when route tracking is active
+    // During an active route, start a GPS watch for smoother updates.
+    if (activeRoute && activeRoute.length > 0) {
+      try {
+        if (navigator.geolocation && !(isNativePlatform && geoPermissionDenied)) {
+          watchId = navigator.geolocation.watchPosition(
+            (position) => {
+              if (!isMounted) return;
+              setGeoPermissionDenied(false);
+              setUserLocation([position.coords.latitude, position.coords.longitude]);
+            },
+            (err: any) => {
+              if (isNativePlatform && err && err.code === 1) {
+                setGeoPermissionDenied(true);
+              }
+            },
+            {
+              enableHighAccuracy: true,
+              maximumAge: 2000,
+              timeout: 8000
+            }
+          );
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // Fallback: also refresh periodically so we don't stall on some devices.
     let intervalId: NodeJS.Timeout | null = null;
     if (activeRoute && activeRoute.length > 0) {
       intervalId = setInterval(() => {
         updateLocation();
-      }, 60000); // 60 seconds
+      }, 10000);
     }
 
     return () => {
+      isMounted = false;
+      if (watchId != null && navigator.geolocation) {
+        try { navigator.geolocation.clearWatch(watchId); } catch { /* ignore */ }
+      }
       if (intervalId) clearInterval(intervalId);
     };
-  }, [activeRoute]);
+  }, [activeRoute, geoPermissionDenied]);
 
   // load activities from supabase on mount (admins will see them)
   useEffect(() => {
@@ -446,9 +725,141 @@ function App() {
 
   // Team panel state
   const [isTeamPanelOpen, setIsTeamPanelOpen] = useState(false);
+  // Fullscreen live map overlay
+  const [isLiveMapOpen, setIsLiveMapOpen] = useState(false);
+  // Live-follow a team member on the in-app map (2s refresh)
+  const [followMember, setFollowMember] = useState<{ id: string; username: string; lat: number; lng: number } | null>(null);
+  const [teamLiveLocations, setTeamLiveLocations] = useState<Array<{ id: string; username: string; lat: number; lng: number }>>([]);
+
+  // Keep a small ref so we don't spam updates with identical coords
+  const lastTeamLocWriteRef = useRef<{ lat: number; lng: number } | null>(null);
+
+  useEffect(() => {
+    if (!isLiveMapOpen && !followMember?.id) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('team_status')
+          .select('user_id,username,current_lat,current_lng,last_updated_at,status')
+          .order('last_updated_at', { ascending: false });
+        if (cancelled) return;
+        if (error) return;
+
+        const rows = Array.isArray(data) ? data : [];
+        const mapped = rows
+          .filter((r: any) => r?.current_lat != null && r?.current_lng != null)
+          .map((r: any) => ({
+            id: String(r.user_id),
+            username: String(r.username ?? ''),
+            lat: Number(r.current_lat),
+            lng: Number(r.current_lng)
+          }));
+        setTeamLiveLocations(mapped);
+
+        if (followMember?.id) {
+          const found = rows.find((r: any) => String(r.user_id) === followMember.id);
+          if (found?.current_lat != null && found?.current_lng != null) {
+            setFollowMember(prev => {
+              if (!prev) return prev;
+              const nextLat = Number(found.current_lat);
+              const nextLng = Number(found.current_lng);
+              if (prev.lat === nextLat && prev.lng === nextLng) return prev;
+              return { ...prev, lat: nextLat, lng: nextLng };
+            });
+          }
+        }
+      } catch {
+        // ignore polling errors
+      }
+    };
+
+    // immediate fetch + 2s interval
+    poll();
+    const id = window.setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [isLiveMapOpen, followMember?.id]);
+
+  // While a route is active, write the current GPS point into `team_status` frequently
+  // so others can see smooth movement on the live map.
+  useEffect(() => {
+    if (!currentUser?.id || !currentUser?.username) return;
+    if (!activeRoute || activeRoute.length === 0) return;
+    if (!userLocation) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      if (!userLocation) return;
+
+      const lat = userLocation[0];
+      const lng = userLocation[1];
+
+      const prev = lastTeamLocWriteRef.current;
+      if (prev && prev.lat === lat && prev.lng === lng) return;
+
+      lastTeamLocWriteRef.current = { lat, lng };
+
+      // Keep status fresh without re-sending full route payload.
+      const derivedStatus = trackingState.isWorking ? 'adreste' : 'yolda';
+
+      try {
+        await supabase
+          .from('team_status')
+          .update({
+            username: currentUser.username,
+            status: derivedStatus,
+            current_lat: lat,
+            current_lng: lng,
+            last_updated_at: new Date().toISOString()
+          })
+          .eq('user_id', currentUser.id);
+      } catch {
+        // ignore
+      }
+    };
+
+    // Immediate write + 2s loop
+    tick();
+    const id = window.setInterval(tick, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentUser?.id,
+    currentUser?.username,
+    activeRoute,
+    trackingState.isWorking,
+    userLocation?.[0],
+    userLocation?.[1]
+  ]);
 
   const currentRegion = locations.find(r => r.id === selectedRegion);
   const allLocations = useMemo(() => locations.flatMap(region => region.locations), [locations]);
+
+  const [pendingTaskToStart, setPendingTaskToStart] = useState<Task | null>(null);
+
+  const handleStartTask = async (task: Task) => {
+    if (!currentUser) return;
+
+    // If there is an existing active route, confirm overwrite (minimal UX)
+    if (activeRoute && activeRoute.length > 0) {
+      const ok = window.confirm('Mevcut rota devam ediyor. Görevi başlatmak için mevcut rotayı iptal etmek ister misiniz?');
+      if (!ok) return;
+      await handleCancelRoute();
+    }
+
+    // Redirect to the same optimized route builder flow (nearest-neighbor + 2-opt)
+    setPendingTaskToStart(task);
+    setIsTasksPanelOpen(false);
+    setIsRouteModalOpen(true);
+  };
   const currentLocations = selectedRegion === 0 ? allLocations : (currentRegion?.locations || []);
 
 
@@ -565,6 +976,15 @@ function App() {
     setCurrentRouteIndex(0);
     setCurrentLegStartTime(null);
     resetTracking();
+
+    // If this route was started from a task, revert task back to assigned
+    if (activeTaskId) {
+      try { await updateTaskStatus(activeTaskId, 'assigned'); } catch { /* ignore */ }
+      setActiveTaskId(null);
+    }
+
+    // Clear local snapshot so next launch doesn't resurrect a cancelled route
+    try { clearTrackingState(); } catch { /* ignore */ }
     
     // Clear active route but preserve today's completed stats
     if (currentUser) {
@@ -732,6 +1152,11 @@ function App() {
       setCurrentRouteIndex(0);
       setCurrentLegStartTime(null);
       resetTracking();
+
+      if (activeTaskId) {
+        try { await updateTaskStatus(activeTaskId, 'completed'); } catch { /* ignore */ }
+        setActiveTaskId(null);
+      }
       
       // Update with final stats before clearing route
       await updateTeamStatus({
@@ -748,6 +1173,9 @@ function App() {
       
       // Clear active route but preserve stats
       await clearTeamStatus(currentUser.id);
+
+      // Clear local snapshot now that the route is finished
+      try { clearTrackingState(); } catch { /* ignore */ }
     }
 
     // Refresh activities
@@ -777,18 +1205,35 @@ function App() {
   // and logouts are handled explicitly by user action only.
   useEffect(() => {
     const onBeforeUnload = () => {
-      // Intentionally no-op: we keep session and avoid side effects
+      // Persist a local snapshot so refresh/tab discard can resume cleanly
+      const snap = trackingSnapshotRef.current;
+      if (snap) {
+        try { saveTrackingState(snap); } catch { /* ignore */ }
+      }
     };
 
     const onVisibilityChange = () => {
-      // Intentionally no-op on tab hide/show to avoid reset-like behavior
+      if (document.visibilityState !== 'hidden') return;
+      const snap = trackingSnapshotRef.current;
+      if (snap) {
+        try { saveTrackingState(snap); } catch { /* ignore */ }
+      }
+    };
+
+    const onPageHide = () => {
+      const snap = trackingSnapshotRef.current;
+      if (snap) {
+        try { saveTrackingState(snap); } catch { /* ignore */ }
+      }
     };
 
     window.addEventListener('beforeunload', onBeforeUnload);
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', onPageHide);
     return () => {
       window.removeEventListener('beforeunload', onBeforeUnload);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', onPageHide);
     };
   }, []);
 
@@ -996,7 +1441,7 @@ function App() {
         // ignore if modal state isn't available
       }
       // close drawer if open (mobile)
-      try { setDrawerOpen(false); } catch (e) {}
+      try { setDrawerOpen(false); } catch (_e) { /* ignore */ }
     } else {
       console.warn('Could not find location for activity click:', name);
     }
@@ -1062,6 +1507,8 @@ function App() {
     );
   }
 
+  const canViewLiveMap = userRole === 'admin';
+
   return (
     <>
       <VersionChecker />
@@ -1073,7 +1520,7 @@ function App() {
         setUserRole(role);
         setCurrentUser(user);
         // persist session
-        try { localStorage.setItem('app_session_v1', JSON.stringify({ user, role })); } catch (_e) { }
+        try { localStorage.setItem('app_session_v1', JSON.stringify({ user, role })); } catch (_e) { /* ignore */ }
         pushActivity(user.username, 'Giriş yaptı');
         
         // For editor users, route restoration happens automatically via useEffect on currentUser change
@@ -1084,7 +1531,7 @@ function App() {
           <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
             {/* Header: on mobile show hamburger + logo + region selector only.
                 On desktop show logo + region selector + actions (export, yeni/rota, avatar). */}
-            <header className="fixed inset-x-0 top-0 z-50 bg-white/90 backdrop-blur-md border-b border-gray-100 shadow-sm transition-all duration-300" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+            <header className="fixed inset-x-0 top-0 z-[1000] bg-white/90 backdrop-blur-md border-b border-gray-100 shadow-sm transition-all duration-300" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
               <div className="w-full px-4 sm:px-6 lg:px-8">
                 <div className="flex items-center justify-between h-16 sm:h-20">
                   <div className="flex items-center gap-4 shrink-0">
@@ -1115,6 +1562,23 @@ function App() {
                     </div>
                   </div>
 
+                  {/* Mobile right side: globe button for fullscreen live map (admin only) */}
+                  {canViewLiveMap && (
+                    <div className={showMobileHeader ? 'flex items-center gap-2 shrink-0' : 'hidden'}>
+                      <button
+                        onClick={() => setIsLiveMapOpen(true)}
+                        className="flex items-center justify-center w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-700 shadow-sm hover:shadow-md transition-all duration-200"
+                        title="Canlı Harita"
+                        aria-label="Canlı Harita"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M3.6 9h16.8M3.6 15h16.8M12 3c2.5 2.5 4 5.5 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.5-4-9s1.5-6.5 4-9z" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+
                   {/* Right side: desktop-only actions (hidden on mobile header) */}
                   <div className={`${showMobileHeader ? 'hidden' : 'hidden md:flex'} items-center gap-4`}>
                     {userRole === 'admin' && (
@@ -1138,6 +1602,19 @@ function App() {
                     {/* Admin / management actions visible on desktop */}
                     {(userCanCreate || userCanRoute || userCanTeamView || userRole === 'admin') && (
                       <div className="flex items-center gap-2">
+                        {canViewLiveMap && (
+                          <button
+                            onClick={() => setIsLiveMapOpen(true)}
+                            className="flex items-center justify-center w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-700 shadow-sm hover:shadow-md transition-all duration-200"
+                            title="Canlı Harita"
+                            aria-label="Canlı Harita"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M3.6 9h16.8M3.6 15h16.8M12 3c2.5 2.5 4 5.5 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.5-4-9s1.5-6.5 4-9z" />
+                            </svg>
+                          </button>
+                        )}
                         {userCanCreate && (
                           <button
                             onClick={() => {
@@ -1195,6 +1672,17 @@ function App() {
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
                           </button>
                         )}
+
+                        {/* Tasks Panel Button */}
+                        {currentUser && (userCanRoute || userRole === 'editor' || userRole === 'admin') && (
+                          <button
+                            onClick={() => setIsTasksPanelOpen(true)}
+                            className="flex items-center justify-center w-10 h-10 bg-slate-700 text-white rounded-full hover:bg-slate-800 shadow-sm hover:shadow-md transition-all duration-200"
+                            title="Görevler"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 5h10M9 9h10M9 13h10M9 17h10M5 5h.01M5 9h.01M5 13h.01M5 17h.01"/></svg>
+                          </button>
+                        )}
                         
                         {/* Team Panel Button - based on can_team_view */}
                         {userCanTeamView && (
@@ -1232,7 +1720,16 @@ function App() {
                             </div>
                         </div>
                         <button 
-                            onClick={async () => { if (currentUser) { try { await pushActivity(currentUser.username, 'Çıkış yaptı'); } catch (e) { console.warn('pushActivity failed on logout', e); } } setUserRole(null); setCurrentUser(null); window.location.href = '/login'; }} 
+                            onClick={async () => {
+                              if (currentUser) {
+                                try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
+                                catch (e) { console.warn('pushActivity failed on logout', e); }
+                              }
+                              try { clearTrackingState(); } catch { /* ignore */ }
+                              setUserRole(null);
+                              setCurrentUser(null);
+                              window.location.href = '/login';
+                            }} 
                             className="ml-4 p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-all duration-200"
                             title="Çıkış Yap"
                         >
@@ -1248,11 +1745,11 @@ function App() {
             {drawerOpen && (
               <>
                 <div
-                  className="fixed inset-0 bg-black/30 z-40"
+                  className="fixed inset-0 bg-black/30 z-[1100]"
                   onClick={() => setDrawerOpen(false)}
                   aria-hidden
                 />
-                <aside className="fixed top-0 left-0 z-50 h-full w-72 bg-white shadow-2xl p-4 overflow-auto">
+                <aside className="fixed top-0 left-0 z-[1110] h-full w-72 bg-white shadow-2xl p-4 overflow-auto">
                   <div className="flex items-start justify-between mb-4">
                     <div className="flex-1">
                       {/* Mobile drawer: show last-updated and recent activities for quick access */}
@@ -1320,7 +1817,21 @@ function App() {
                               <div className="text-xs text-gray-500">{userRole === 'admin' ? 'Admin' : userRole === 'editor' ? 'Editor' : userRole === 'viewer' ? 'Viewer' : 'User'}</div>
                             </div>
                           </div>
-                          <button onClick={async () => { if (currentUser) { try { await pushActivity(currentUser.username, 'Çıkış yaptı'); } catch (e) { console.warn('pushActivity failed on drawer logout', e); } } setUserRole(null); setCurrentUser(null); window.location.href = '/login'; }} className="mt-2 w-full px-3 py-2 bg-red-600 text-white rounded-md">Çıkış</button>
+                          <button
+                            onClick={async () => {
+                              if (currentUser) {
+                                try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
+                                catch (e) { console.warn('pushActivity failed on drawer logout', e); }
+                              }
+                              try { clearTrackingState(); } catch { /* ignore */ }
+                              setUserRole(null);
+                              setCurrentUser(null);
+                              window.location.href = '/login';
+                            }}
+                            className="mt-2 w-full px-3 py-2 bg-red-600 text-white rounded-md"
+                          >
+                            Çıkış
+                          </button>
                         </>
                       ) : (
                         <button onClick={() => window.location.href = '/login'} className="w-full px-3 py-2 bg-blue-600 text-white rounded-md">Giriş</button>
@@ -1388,6 +1899,17 @@ function App() {
                             </button>
                           )}
                         </div>
+
+                        {/* Tasks Panel Button - (mobile drawer) */}
+                        {currentUser && (userCanRoute || userRole === 'editor' || userRole === 'admin') && (
+                          <button
+                            onClick={() => { setIsTasksPanelOpen(true); setDrawerOpen(false); }}
+                            className="w-full mt-2 px-3 py-2 bg-slate-700 text-white rounded-md text-sm font-medium hover:bg-slate-800 shadow-sm flex items-center justify-center gap-2"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 5h10M9 9h10M9 13h10M9 17h10M5 5h.01M5 9h.01M5 13h.01M5 17h.01"/></svg>
+                            Görevler
+                          </button>
+                        )}
                         
                         {/* Team Panel Button - based on can_team_view (mobile drawer) */}
                         {userCanTeamView && (
@@ -1431,6 +1953,33 @@ function App() {
               {userCanView ? (
                 view === 'map' ? (
                   <div className="space-y-4">
+                    <div className="flex items-center justify-end">
+                      <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+                        <button
+                          type="button"
+                          onClick={() => setMapMode('lokasyon')}
+                          className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                            mapMode === 'lokasyon'
+                              ? 'bg-indigo-600 text-white'
+                              : 'text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          Lokasyon modu
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMapMode('harita')}
+                          className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                            mapMode === 'harita'
+                              ? 'bg-indigo-600 text-white'
+                              : 'text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          Harita modu
+                        </button>
+                      </div>
+                    </div>
+
                     <div
                       className="bg-black rounded-t-lg shadow-md border border-gray-200 w-full overflow-hidden"
                       style={{ minHeight: 'calc(var(--vh, 1vh) * 40)' }}
@@ -1440,6 +1989,8 @@ function App() {
                           regions={locations}
                           locations={currentLocations}
                           selectedRegion={selectedRegion}
+                          activeWorkRegionIds={activeWorkRegionIds}
+                          onDismissActiveWorkRegion={dismissActiveWorkRegion}
                           onLocationSelect={handleLocationSelect}
                           onRegionSelect={(id) => setSelectedRegion(id)}
                           focusLocation={focusLocation}
@@ -1448,9 +1999,70 @@ function App() {
                           currentRouteIndex={currentRouteIndex}
                           userLocation={userLocation}
                           calculateDistance={calculateDistance}
+                          followMemberLocation={followMember}
+                          useInlineSvg={mapMode === 'lokasyon'}
                           viewRestricted={!userCanView}
+                          hideSummaryOverlay={true}
                         />
                       </div>
+                    </div>
+
+                    {/* Resmi Kabul Oranı (haritanın altında sabit) */}
+                    <div className="bg-white rounded-b-lg shadow-md border border-gray-200 border-t-0 px-3 py-3">
+                      {(() => {
+                        const totalShown = (currentLocations || []).length;
+                        const acceptedCount = (currentLocations || []).filter(l => !!l.details && !!l.details.isAccepted).length;
+                        const installedCount = (currentLocations || []).filter(
+                          l => !!l.details && !l.details.isAccepted && !!l.details.isInstalled,
+                        ).length;
+                        const startedCount = (currentLocations || []).filter(
+                          l => !!l.details && !l.details.isAccepted && !l.details.isInstalled && !!l.details.isConfigured,
+                        ).length;
+                        const untouchedCount = Math.max(0, totalShown - acceptedCount - installedCount - startedCount);
+
+                        const acceptedPercent = totalShown > 0 ? Math.round((acceptedCount / totalShown) * 100) : 0;
+                        const installedPercent = totalShown > 0 ? Math.round((installedCount / totalShown) * 100) : 0;
+                        const startedPercent = totalShown > 0 ? Math.round((startedCount / totalShown) * 100) : 0;
+                        const untouchedPercent = totalShown > 0 ? Math.round((untouchedCount / totalShown) * 100) : 0;
+
+                        const summaryColor = totalShown > 0 ? '#22c55e' : '#64748b';
+
+                        return (
+                          <div className="w-full">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-base sm:text-lg font-bold text-gray-800">Resmi Kabul Oranı</div>
+                              <div className="text-lg sm:text-xl font-bold" style={{ color: summaryColor }}>
+                                {acceptedPercent}%
+                              </div>
+                            </div>
+
+                            <div className="mt-2 h-2 bg-gray-200 rounded overflow-hidden" aria-hidden>
+                              <div className="h-full transition-all" style={{ width: `${acceptedPercent}%`, background: summaryColor }} />
+                            </div>
+
+                            <div className="mt-2 text-sm text-slate-600">{acceptedCount} / {totalShown} lokasyon</div>
+
+                            <div className="mt-3 grid grid-cols-1 gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="inline-block w-3 h-3 rounded" style={{ background: '#22c55e' }} />
+                                <span className="text-sm text-gray-700">Kabul Edildi — {acceptedCount} ({acceptedPercent}%)</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="inline-block w-3 h-3 rounded" style={{ background: '#3b82f6' }} />
+                                <span className="text-sm text-gray-700">Kurulum Tamam (Kabul Bekliyor) — {installedCount} ({installedPercent}%)</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="inline-block w-3 h-3 rounded" style={{ background: '#f59e0b' }} />
+                                <span className="text-sm text-gray-700">Başlandı (Ring) — {startedCount} ({startedPercent}%)</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="inline-block w-3 h-3 rounded" style={{ background: '#92400e' }} />
+                                <span className="text-sm text-gray-700">Hiç Girilmedi — {untouchedCount} ({untouchedPercent}%)</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="mt-2">
@@ -1483,6 +2095,33 @@ function App() {
                 )
               ) : (
                 <div className="space-y-4">
+                  <div className="flex items-center justify-end">
+                    <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+                      <button
+                        type="button"
+                        onClick={() => setMapMode('lokasyon')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                          mapMode === 'lokasyon'
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-gray-700 hover:bg-gray-100'
+                        }`}
+                      >
+                        Lokasyon modu
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMapMode('harita')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                          mapMode === 'harita'
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-gray-700 hover:bg-gray-100'
+                        }`}
+                      >
+                        Harita modu
+                      </button>
+                    </div>
+                  </div>
+
                   <div
                     className="bg-black rounded-t-lg shadow-md border border-gray-200 w-full overflow-hidden"
                     style={{ minHeight: 'calc(var(--vh, 1vh) * 40)' }}
@@ -1492,6 +2131,8 @@ function App() {
                         regions={locations}
                         locations={currentLocations}
                         selectedRegion={selectedRegion}
+                        activeWorkRegionIds={activeWorkRegionIds}
+                        onDismissActiveWorkRegion={dismissActiveWorkRegion}
                         onLocationSelect={handleLocationSelect}
                         onRegionSelect={(id) => setSelectedRegion(id)}
                         focusLocation={focusLocation}
@@ -1500,6 +2141,8 @@ function App() {
                         currentRouteIndex={currentRouteIndex}
                         userLocation={userLocation}
                         calculateDistance={calculateDistance}
+                        followMemberLocation={followMember}
+                        useInlineSvg={mapMode === 'lokasyon'}
                         viewRestricted={!userCanView}
                       />
                     </div>
@@ -1578,54 +2221,21 @@ function App() {
               {/* Route Builder Modal */}
               <RouteBuilderModal
                 isOpen={isRouteModalOpen}
-                onClose={() => setIsRouteModalOpen(false)}
+                onClose={() => {
+                  setIsRouteModalOpen(false);
+                  setPendingTaskToStart(null);
+                }}
                 locations={allLocations}
                 regions={locations}
                 userLocation={userLocation}
+                initialSelectedIds={pendingTaskToStart ? (pendingTaskToStart.routeLocationIds || []).map((x) => String(x)) : undefined}
+                initialRegionFilter={pendingTaskToStart?.regionId ?? undefined}
+                initialStartMode={pendingTaskToStart ? 'current' : undefined}
                 onStartRoute={async (route: Location[]) => {
-                  const routeStartTime = new Date();
-                  setActiveRoute(route);
-                  setCurrentRouteIndex(0);
-                  setIsTrackingRoute(true);
-                  setCurrentLegStartTime(routeStartTime);
-                  setView('map');
-                  // Bildirim: rota başlatıldı
-                  notifyRouteStarted(currentUser?.username ?? null, route.length);
-                  
-                  // Update team status: route started, going to first location
-                  if (currentUser && route.length > 0) {
-                    const firstLocation = route[0];
-                    const nextLocation = route.length > 1 ? route[1] : null;
-                    await updateTeamStatus({
-                      userId: currentUser.id,
-                      username: currentUser.username,
-                      status: 'yolda',
-                      currentLocationId: typeof firstLocation.id === 'number' ? firstLocation.id : parseInt(firstLocation.id) || null,
-                      currentLocationName: firstLocation.name,
-                      nextLocationName: nextLocation?.name ?? null,
-                      totalRouteCount: route.length,
-                      completedCount: 0,
-                      currentLat: userLocation?.[0] ?? null,
-                      currentLng: userLocation?.[1] ?? null,
-                      activeRoute: route,
-                      currentRouteIndex: 0,
-                      isWorking: false,
-                      workStartTime: null,
-                      currentLegStartTime: routeStartTime,
-                      completedLocations: completedLocations,
-                      totalTravelMinutes: totalTravelMinutes,
-                      totalWorkMinutes: totalWorkMinutes,
-                      todayCompletedCount: todayCompletedCount
-                    });
-                  }
-                  
-                  // Focus on first location
-                  if (route.length > 0) {
-                    setFocusLocation(route[0]);
-                    setSelectedLocation(route[0]);
-                  }
+                  await startRoute(route, pendingTaskToStart?.id ?? null);
                   setTimeout(() => {
                     setIsRouteModalOpen(false);
+                    setPendingTaskToStart(null);
                   }, 100);
                 }}
               />
@@ -1634,11 +2244,56 @@ function App() {
               <TeamPanel
                 isOpen={isTeamPanelOpen}
                 onClose={() => setIsTeamPanelOpen(false)}
-                onFocusMember={(_lat: number, _lng: number) => {
-                  // Could focus map on team member location in future
+                currentUserId={currentUser?.id ?? null}
+                currentUsername={currentUser?.username ?? null}
+                regions={locations}
+                onFocusMember={canViewLiveMap ? ((memberId: string, username: string, lat: number, lng: number) => {
+                  setFollowMember({ id: memberId, username, lat, lng });
+                  setView('map');
                   setIsTeamPanelOpen(false);
-                }}
+                  setIsLiveMapOpen(true);
+                }) : undefined}
               />
+
+              {/* Fullscreen Live Map Overlay */}
+              {isLiveMapOpen && canViewLiveMap && (
+                <div className="fixed inset-0 z-[1300] bg-black/30" role="dialog" aria-modal="true">
+                  <div className="absolute inset-0 bg-white" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+                    <div className="absolute inset-x-0 top-0 z-10 h-14 sm:h-16 bg-white/90 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-4">
+                      <div className="text-sm sm:text-base font-semibold text-gray-800">
+                        Canlı Harita
+                        {followMember?.username ? <span className="ml-2 text-gray-500 font-medium">({followMember.username})</span> : null}
+                      </div>
+                      <button
+                        onClick={() => setIsLiveMapOpen(false)}
+                        className="p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+                        aria-label="Kapat"
+                        title="Kapat"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <div className="absolute inset-0 pt-14 sm:pt-16">
+                      <MapComponent
+                        regions={undefined}
+                        locations={[]}
+                        selectedRegion={0}
+                        focusLocation={null}
+                        activeRoute={null}
+                        currentRouteIndex={0}
+                        userLocation={null}
+                        teamLocations={teamLiveLocations}
+                        followMemberLocation={followMember}
+                        useInlineSvg={false}
+                        viewRestricted={true}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Location Tracking Overlay - only for users with view permission */}
               {userCanView && activeRoute && activeRoute.length > 0 && (
@@ -1659,6 +2314,16 @@ function App() {
                 <AdminPanel
                   currentUserId={currentUser.id}
                   onClose={() => setIsAdminPanelOpen(false)}
+                />
+              )}
+
+              {/* Tasks Panel Modal */}
+              {currentUser && (
+                <TasksPanel
+                  isOpen={isTasksPanelOpen}
+                  onClose={() => setIsTasksPanelOpen(false)}
+                  userId={currentUser.id}
+                  onStartTask={handleStartTask}
                 />
               )}
             </main>
