@@ -5,9 +5,9 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 
 // Current app version - UPDATE THIS WHEN YOU RELEASE NEW VERSION
-// Store / native version: 2.0.7 (Android versionCode 8, iOS build 13)
-const CURRENT_VERSION_CODE = 8;
-const CURRENT_VERSION_NAME = '2.0.7';
+// Store / native version: 2.1.1 (Android versionCode 12)
+const CURRENT_VERSION_CODE = 12;
+const CURRENT_VERSION_NAME = '2.1.1';
 
 interface AppVersion {
   version_code: number;

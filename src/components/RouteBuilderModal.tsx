@@ -15,6 +15,9 @@ interface Props {
   regions?: { id: number; name: string; locations: Location[] }[]; // optional grouped regions
   onStartRoute?: (route: Location[]) => void; // callback when user starts tracking a route
   userLocation?: [number, number] | null; // user's current GPS location
+  initialSelectedIds?: string[];
+  initialRegionFilter?: number;
+  initialStartMode?: 'auto' | 'fixed' | 'current';
 }
 
 // Haversine distance (meters)
@@ -110,7 +113,17 @@ const twoOpt = (route: number[], points: [number, number][]) => {
 
 const metersToKmStr = (m: number) => `${(m/1000).toFixed(2)} km`;
 
-const RouteBuilderModal: React.FC<Props> = ({ isOpen, onClose, locations, regions, onStartRoute, userLocation }) => {
+const RouteBuilderModal: React.FC<Props> = ({
+  isOpen,
+  onClose,
+  locations,
+  regions,
+  onStartRoute,
+  userLocation,
+  initialSelectedIds,
+  initialRegionFilter,
+  initialStartMode
+}) => {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [startMode, setStartMode] = useState<'auto' | 'fixed' | 'current'>('auto');
   const [fixedStartId, setFixedStartId] = useState<string | null>(null);
@@ -125,6 +138,34 @@ const RouteBuilderModal: React.FC<Props> = ({ isOpen, onClose, locations, region
   const [mobileTab, setMobileTab] = useState<'selection' | 'preview'>('selection');
   const [showFilters, setShowFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Prefill selection/filter/mode when modal opens (used by task flow)
+  useEffect(() => {
+    if (!isOpen) return;
+    if (Array.isArray(initialSelectedIds)) {
+      setSelectedIds(initialSelectedIds);
+      setShowManualEdit(false);
+      setFixedStartId(null);
+    } else {
+      // default: clear previous selection so each open starts clean
+      setSelectedIds([]);
+      setShowManualEdit(false);
+      setFixedStartId(null);
+    }
+    if (typeof initialRegionFilter === 'number') {
+      setRegionFilter(initialRegionFilter);
+    } else {
+      setRegionFilter(0);
+    }
+    if (initialStartMode) {
+      setStartMode(initialStartMode);
+    } else {
+      setStartMode('auto');
+    }
+    setSearchQuery('');
+    setShowFilters(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Turkish-aware A–Z sorting for names (numeric + case-insensitive)
   const nameCollator = useMemo(() => new Intl.Collator('tr', { sensitivity: 'base', numeric: true }), []);
@@ -149,7 +190,7 @@ const RouteBuilderModal: React.FC<Props> = ({ isOpen, onClose, locations, region
   }, [regionScopedLocations, searchQuery]);
   // selectedFiltered depends on selectedIds and displayedLocations
   const selectedFiltered = useMemo(() => {
-    const lookup = new Map(regionScopedLocations.map(loc => [loc.id, loc]));
+    const lookup = new Map(regionScopedLocations.map(loc => [String(loc.id), loc]));
     return selectedIds
       .map((id: string) => lookup.get(id))
       .filter(Boolean) as Location[];
@@ -806,7 +847,7 @@ const RouteBuilderModal: React.FC<Props> = ({ isOpen, onClose, locations, region
               <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                 <span className="text-xs font-medium text-gray-500">{displayedLocations.length} lokasyon listeleniyor</span>
                 <div className="flex gap-2">
-                  <button onClick={() => setSelectedIds(displayedLocations.map(l => l.id))} className="text-xs px-2 py-1 text-indigo-600 hover:bg-indigo-50 rounded transition-colors">Tümünü Seç</button>
+                  <button onClick={() => setSelectedIds(displayedLocations.map(l => String(l.id)))} className="text-xs px-2 py-1 text-indigo-600 hover:bg-indigo-50 rounded transition-colors">Tümünü Seç</button>
                   <button onClick={() => setSelectedIds([])} className="text-xs px-2 py-1 text-gray-500 hover:bg-gray-100 rounded transition-colors">Temizle</button>
                 </div>
               </div>
@@ -815,13 +856,14 @@ const RouteBuilderModal: React.FC<Props> = ({ isOpen, onClose, locations, region
             {/* Location List */}
             <div className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2">
               {displayedLocations.map(loc => {
-                const checked = selectedIds.includes(loc.id);
+                const locId = String(loc.id);
+                const checked = selectedIds.includes(locId);
                 return (
                   <div 
                     key={loc.id} 
                     onClick={() => {
-                      if (checked) setSelectedIds(prev => prev.filter(id => id !== loc.id));
-                      else setSelectedIds(prev => [...prev, loc.id]);
+                      if (checked) setSelectedIds(prev => prev.filter(id => id !== locId));
+                      else setSelectedIds(prev => [...prev, locId]);
                     }}
                     className={`group p-3 rounded-xl border transition-all cursor-pointer flex items-start gap-3 ${checked ? 'border-indigo-500 bg-indigo-50/50 shadow-sm' : 'border-gray-200 bg-white hover:border-indigo-300 hover:shadow-sm'}`}
                   >

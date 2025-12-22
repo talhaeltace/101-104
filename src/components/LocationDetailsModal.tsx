@@ -11,10 +11,13 @@ interface Props {
   isAdmin?: boolean;
   isEditor?: boolean;
   isViewer?: boolean;
+  canEdit?: boolean;
 }
 
-const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEdit, isAdmin, isEditor, isViewer }) => {
+const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEdit, isAdmin, isEditor, isViewer, canEdit }) => {
   const [noteOpen, setNoteOpen] = useState(false);
+
+  const canEditLocation = (typeof canEdit === 'boolean' ? canEdit : !!(isAdmin || isEditor)) && !isViewer;
   
   const mapsUrl =
     location?.coordinates && location.coordinates.length === 2 && location.coordinates[0] != null && location.coordinates[1] != null
@@ -38,15 +41,16 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
 
   // Status helper
   const getStatusInfo = () => {
-    const isActive = !!location.details.isActive;
-    const isConfigured = !!location.details.isConfigured;
-    if (isActive && isConfigured) {
-      return { label: 'Aktif', color: 'bg-green-500', textColor: 'text-green-700', bgColor: 'bg-green-50', borderColor: 'border-green-200' };
+    if (location.details.isAccepted) {
+      return { label: 'Kabul Edildi', color: 'bg-green-500', textColor: 'text-green-700', bgColor: 'bg-green-50', borderColor: 'border-green-200' };
     }
-    if (isConfigured) {
-      return { label: 'Konfigüre Edildi', color: 'bg-amber-500', textColor: 'text-amber-700', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' };
+    if (location.details.isInstalled) {
+      return { label: 'Kurulum Tamam (Kabul Bekliyor)', color: 'bg-blue-500', textColor: 'text-blue-700', bgColor: 'bg-blue-50', borderColor: 'border-blue-200' };
     }
-    return { label: 'Pasif', color: 'bg-red-500', textColor: 'text-red-700', bgColor: 'bg-red-50', borderColor: 'border-red-200' };
+    if (location.details.isConfigured) {
+      return { label: 'Başlandı (Ring)', color: 'bg-amber-500', textColor: 'text-amber-700', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' };
+    }
+    return { label: 'Hiç Girilmedi', color: 'bg-amber-800', textColor: 'text-amber-900', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' };
   };
 
   const status = getStatusInfo();
@@ -71,8 +75,10 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
   ];
 
   return (
-    <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    <div
+      className="fixed inset-0 z-[1200] flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
       onWheel={(e) => e.stopPropagation()}
     >
       {/* Backdrop */}
@@ -92,16 +98,15 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
               <div className={`w-12 h-12 rounded-xl ${status.color} flex items-center justify-center shadow-lg`}>
                 <MapPin className="w-6 h-6 text-white" />
               </div>
-              
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">{location.name}</h2>
-                <div className="flex items-center gap-3 mt-1">
-                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${status.bgColor} ${status.textColor} border ${status.borderColor}`}>
-                    <span className={`w-2 h-2 rounded-full ${status.color}`}></span>
+
+              <div className="flex flex-col">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <h2 className="text-2xl font-bold text-gray-900">{location.name}</h2>
+                  <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${status.bgColor} ${status.textColor} border ${status.borderColor}`}>
                     {status.label}
                   </span>
-                  <span className="text-sm text-gray-500">{location.center}</span>
                 </div>
+                <span className="text-sm text-gray-500">{location.center}</span>
               </div>
             </div>
             
@@ -337,7 +342,7 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
 
         {/* Footer */}
         <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
-          {(isAdmin || isEditor) && (
+          {canEditLocation && (
             <button 
               onClick={() => onEdit(location)} 
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors shadow-sm"

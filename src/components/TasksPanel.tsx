@@ -1,0 +1,185 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ClipboardList, RefreshCw, X } from 'lucide-react';
+import type { Task } from '../lib/tasks';
+import { listTasksForUser } from '../lib/tasks';
+import { supabase } from '../lib/supabase';
+
+interface Props {
+  isOpen: boolean;
+  onClose: () => void;
+  userId: string;
+  onStartTask: (task: Task) => void;
+}
+
+const statusLabel: Record<string, string> = {
+  assigned: 'Atandı',
+  in_progress: 'Devam Ediyor',
+  completed: 'Tamamlandı',
+  cancelled: 'İptal'
+};
+
+const TasksPanel: React.FC<Props> = ({ isOpen, onClose, userId, onStartTask }) => {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const list = await listTasksForUser(userId);
+      setTasks(list);
+    } catch {
+      setError('Görevler yüklenemedi');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    load();
+
+    const channel = supabase
+      .channel(`tasks_changes_${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tasks',
+          filter: `assigned_to_user_id=eq.${userId}`
+        },
+        () => {
+          load();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, userId]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+        onClose();
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen, onClose]);
+
+  const visibleTasks = useMemo(() => {
+    // Keep it minimal: show active/assigned first, then the rest
+    const score = (t: Task) => (t.status === 'in_progress' ? 0 : t.status === 'assigned' ? 1 : 2);
+    return [...tasks].sort((a, b) => score(a) - score(b));
+  }, [tasks]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[1200] bg-black/40 flex items-center justify-center p-2 sm:p-4">
+      <div
+        ref={panelRef}
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[95vh] flex flex-col overflow-hidden"
+      >
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-100 bg-gradient-to-r from-indigo-600 to-purple-600 text-white">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <ClipboardList className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-bold text-lg sm:text-xl">Görevler</h2>
+              <p className="text-xs sm:text-sm text-white/80">{tasks.length} görev</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={load}
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              title="Yenile"
+            >
+              <RefreshCw className={loading ? 'w-5 h-5 animate-spin' : 'w-5 h-5'} />
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              title="Kapat"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+          {error ? (
+            <div className="text-center py-10 text-red-500">{error}</div>
+          ) : loading && tasks.length === 0 ? (
+            <div className="flex items-center justify-center py-12">
+              <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
+            </div>
+          ) : visibleTasks.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">
+              <p className="text-lg">Henüz görev yok</p>
+              <p className="text-sm text-gray-400 mt-1">Görev atandığında burada görünecek</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {visibleTasks.map((t) => {
+                const canStart = t.status === 'assigned';
+                const isActive = t.status === 'in_progress';
+                const routeCount = Array.isArray(t.routeLocationIds) ? t.routeLocationIds.length : 0;
+
+                return (
+                  <div key={t.id} className="border border-gray-200 rounded-xl p-4 bg-white shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <div className="font-semibold text-gray-900 truncate">{t.title}</div>
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
+                            {statusLabel[t.status] ?? t.status}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {t.regionName ? `${t.regionName} • ` : ''}{routeCount} lokasyon
+                          {t.createdByUsername ? ` • Atayan: ${t.createdByUsername}` : ''}
+                        </div>
+                        {t.description ? (
+                          <div className="text-sm text-gray-700 mt-2 whitespace-pre-line">{t.description}</div>
+                        ) : null}
+                      </div>
+
+                      <div className="shrink-0 flex flex-col gap-2">
+                        {(canStart || isActive) && (
+                          <button
+                            onClick={() => onStartTask(t)}
+                            className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700"
+                          >
+                            {isActive ? 'Devam Et' : 'Başlat'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default TasksPanel;

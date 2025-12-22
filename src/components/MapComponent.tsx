@@ -7,6 +7,11 @@ interface MapComponentProps {
   locations: Location[]; // markers to show (current view)
   regions?: { id: number; name: string; locations: Location[] }[]; // all regions for polygon rendering
   selectedRegion: number;
+  // Regions on the inline SVG that should pulse green to indicate recent work.
+  // Multiple regions can pulse at the same time (e.g., last work per user).
+  activeWorkRegionIds?: number[] | null;
+  // Allows user to manually stop the pulsing highlight for a region (until a newer activity happens).
+  onDismissActiveWorkRegion?: (regionId: number) => void;
   onLocationSelect?: (location: Location) => void;
   onRegionSelect?: (regionId: number) => void;
   focusLocation?: Location | null;
@@ -15,15 +20,25 @@ interface MapComponentProps {
   currentRouteIndex?: number; // Current location index in route
   userLocation?: [number, number] | null; // User's current location for distance calculation
   calculateDistance?: (lat1: number, lon1: number, lat2: number, lon2: number) => number;
+  followMemberLocation?: { id: string; username: string; lat: number; lng: number } | null;
+  teamLocations?: { id: string; username: string; lat: number; lng: number }[] | null;
+  // Optional: show the inline SVG map instead of Leaflet tiles.
+  // Default is false (Leaflet).
+  useInlineSvg?: boolean;
   // When true, hide completion overlay/legend and show a neutral
   // "all green" map without per-region completion colors.
   viewRestricted?: boolean;
+  // When true, do not show the bottom-right summary overlay.
+  // (Used when the summary is rendered below the map by the parent.)
+  hideSummaryOverlay?: boolean;
 }
 
 const MapComponent: React.FC<MapComponentProps> = ({
   locations,
   regions,
   selectedRegion,
+  activeWorkRegionIds = null,
+  onDismissActiveWorkRegion,
   onLocationSelect,
   onRegionSelect,
   focusLocation,
@@ -32,18 +47,58 @@ const MapComponent: React.FC<MapComponentProps> = ({
   currentRouteIndex = 0,
   userLocation = null,
   calculateDistance,
-  viewRestricted = false
+  followMemberLocation = null,
+  teamLocations = null,
+  useInlineSvg = false,
+  viewRestricted = false,
+  hideSummaryOverlay = false
 }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<any>(null);
+  const leafletRef = useRef<any>(null);
+  const onLocationSelectRef = useRef<MapComponentProps['onLocationSelect']>(onLocationSelect);
   const markersRef = useRef<any[]>([]);
   const polygonsRef = useRef<any[]>([]);
   const labelsRef = useRef<any[]>([]);
   const routeLineRef = useRef<any>(null);
+  const routeMarkersRef = useRef<any[]>([]);
   const userMarkerRef = useRef<any>(null); // User location marker
+  const followMarkerRef = useRef<any>(null);
+  const teamMarkersRef = useRef<Map<string, any>>(new Map());
+  const didInitialFitRef = useRef<boolean>(false);
+  const didFitMarkersForRegionRef = useRef<number | null>(null);
+  const [mapReady, setMapReady] = useState<boolean>(false);
   // whether the deployment overlay is expanded. On small screens we'll collapse it by default.
   const [overlayOpen, setOverlayOpen] = useState<boolean>(true);
+  const [svgAcceptedPopup, setSvgAcceptedPopup] = useState<null | {
+    regionId: number;
+    title: string;
+    x: number;
+    y: number;
+    align?: 'left' | 'center' | 'right';
+    locations: Location[];
+    accepted: Location[];
+    counts: { total: number; accepted: number; installed: number; started: number; untouched: number };
+    perc: { accepted: number; installed: number; started: number; untouched: number };
+  }>(null);
+
+  useEffect(() => {
+    if (!useInlineSvg) {
+      setSvgAcceptedPopup(null);
+      return;
+    }
+    if (!svgAcceptedPopup) return;
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setSvgAcceptedPopup(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [useInlineSvg, svgAcceptedPopup]);
+
+  useEffect(() => {
+    onLocationSelectRef.current = onLocationSelect;
+  }, [onLocationSelect]);
 
   useEffect(() => {
     // default collapsed on small viewports
@@ -54,16 +109,127 @@ const MapComponent: React.FC<MapComponentProps> = ({
     return () => window.removeEventListener('resize', check);
   }, []);
 
+  // Live-follow team member marker (updated by parent every ~2s)
   useEffect(() => {
+    if (!mapReady || !mapInstance.current) return;
+    if (!followMemberLocation) {
+      if (followMarkerRef.current) {
+        try { followMarkerRef.current.remove(); } catch { /* ignore */ }
+        followMarkerRef.current = null;
+      }
+      return;
+    }
+
+    const L = leafletRef.current;
+    if (!L) return;
+
+    const pos: [number, number] = [followMemberLocation.lat, followMemberLocation.lng];
+    const label = followMemberLocation.username || 'Ekip';
+
+    if (!followMarkerRef.current) {
+      const icon = L.divIcon({
+        className: 'team-follow-marker',
+        html: `
+          <div style="position: relative; width: 28px; height: 28px; border-radius: 9999px; background: #7c3aed; border: 3px solid #ffffff; box-shadow: 0 6px 18px rgba(0,0,0,0.25); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:13px;">
+            ${String(label).slice(0, 1).toUpperCase()}
+          </div>
+        `,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+      followMarkerRef.current = L.marker(pos, { icon }).addTo(mapInstance.current);
+    } else {
+      followMarkerRef.current.setLatLng(pos);
+    }
+
+    // Keep the followed marker in view without forcing a full re-center every refresh.
+    // This reduces tile reload/flicker when updates arrive frequently.
+    try {
+      const map = mapInstance.current;
+      const bounds = map.getBounds?.();
+      const innerBounds = bounds?.pad ? bounds.pad(-0.2) : null; // slightly smaller bounds
+      const shouldPan = !innerBounds || !innerBounds.contains || !innerBounds.contains(pos);
+      if (shouldPan) {
+        map.panTo(pos, { animate: true, duration: 0.6 });
+      }
+    } catch {
+      // ignore
+    }
+  }, [followMemberLocation, mapReady]);
+
+  // Live team markers (all members). Does not pan/zoom.
+  useEffect(() => {
+    if (!mapReady || !mapInstance.current) return;
+
+    const L = leafletRef.current;
+    if (!L) return;
+
+    const list = Array.isArray(teamLocations) ? teamLocations : [];
+    const followId = followMemberLocation?.id ?? null;
+
+    const nextIds = new Set<string>();
+    for (const t of list) {
+      if (!t || !t.id) continue;
+      if (followId && t.id === followId) continue; // avoid duplicate marker vs follow marker
+      nextIds.add(t.id);
+    }
+
+    // Remove markers that disappeared
+    for (const [id, marker] of teamMarkersRef.current.entries()) {
+      if (!nextIds.has(id)) {
+        try { marker.remove(); } catch { /* ignore */ }
+        teamMarkersRef.current.delete(id);
+      }
+    }
+
+    // Create/update markers
+    for (const t of list) {
+      if (!t || !t.id) continue;
+      if (followId && t.id === followId) continue;
+      if (t.lat == null || t.lng == null) continue;
+
+      const pos: [number, number] = [t.lat, t.lng];
+      const label = t.username || 'E';
+
+      const existing = teamMarkersRef.current.get(t.id);
+      if (!existing) {
+        const icon = L.divIcon({
+          className: 'team-live-marker',
+          html: `
+            <div style="position: relative; width: 24px; height: 24px; border-radius: 9999px; background: #7c3aed; border: 3px solid #ffffff; box-shadow: 0 6px 18px rgba(0,0,0,0.18); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:12px;">
+              ${String(label).slice(0, 1).toUpperCase()}
+            </div>
+          `,
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        });
+        const marker = L.marker(pos, { icon }).addTo(mapInstance.current);
+        teamMarkersRef.current.set(t.id, marker);
+      } else {
+        try { existing.setLatLng(pos); } catch { /* ignore */ }
+      }
+    }
+
+    return () => {
+      // no-op: keep markers while map exists
+    };
+  }, [teamLocations, followMemberLocation?.id, mapReady]);
+
+  useEffect(() => {
+    if (useInlineSvg) return;
+
     const initMap = async () => {
       if (!mapRef.current) return;
-      
+
       // Check if the DOM element already has a Leaflet map initialized
       if (mapInstance.current) return;
 
-    // Leaflet'i dinamik olarak yükle
-    const L = (await import('leaflet')) as any;
-      
+      // Leaflet'i dinamik olarak yükle
+      const L = (await import('leaflet')) as any;
+      leafletRef.current = L;
+      // Keep global for any legacy usages (safe fallback)
+      try { (window as any).L = L; } catch { /* ignore */ }
+
       // CSS'i yükle
       const link = document.createElement('link');
       link.rel = 'stylesheet';
@@ -79,17 +245,32 @@ const MapComponent: React.FC<MapComponentProps> = ({
       });
 
       // Haritayı başlat
-      mapInstance.current = L.map(mapRef.current).setView([41.0082, 28.9784], 10);
+      mapInstance.current = L.map(mapRef.current);
 
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors',
         maxZoom: 18,
       }).addTo(mapInstance.current);
+
+      // Default viewport: show all Turkey (not Istanbul).
+      // Only do this once per map instance so marker updates don't re-fit.
+      if (!didInitialFitRef.current) {
+        didInitialFitRef.current = true;
+        try {
+          // Approx bounds for Turkey
+          const turkeyBounds = L.latLngBounds([35.7, 25.7], [42.3, 44.9]);
+          mapInstance.current.fitBounds(turkeyBounds, { padding: [20, 20] });
+        } catch {
+          // ignore
+        }
+      }
       // Some mobile browsers / WebView report viewport heights differently on orientation change.
       // Force Leaflet to recalculate its size shortly after init so tiles and controls are laid out correctly.
       setTimeout(() => {
         try { mapInstance.current.invalidateSize(); } catch (e) { /* ignore */ }
       }, 120);
+
+      setMapReady(true);
     };
 
     initMap();
@@ -97,7 +278,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
     // When viewport changes (orientation/rotation), tell Leaflet to recalc size so it doesn't remain clipped
     const handleResize = () => {
       if (mapInstance.current && typeof mapInstance.current.invalidateSize === 'function') {
-        try { mapInstance.current.invalidateSize({immediate: false}); } catch (e) { /* ignore */ }
+        try { mapInstance.current.invalidateSize({ immediate: false }); } catch (e) { /* ignore */ }
       }
     };
     window.addEventListener('resize', handleResize);
@@ -110,12 +291,14 @@ const MapComponent: React.FC<MapComponentProps> = ({
         mapInstance.current.remove();
         mapInstance.current = null;
       }
+      didInitialFitRef.current = false;
+      setMapReady(false);
     };
-  }, []);
+  }, [useInlineSvg]);
 
   useEffect(() => {
     const updateMarkers = async () => {
-      if (!mapInstance.current) return;
+      if (!mapReady || !mapInstance.current) return;
 
       const L = (await import('leaflet')) as any;
 
@@ -128,17 +311,22 @@ const MapComponent: React.FC<MapComponentProps> = ({
       // Yeni işaretleyiciler ekle (sadece tek bir bölge seçiliyse)
       if (selectedRegion !== 0) {
         locations.forEach((location) => {
-        // Renk mantığı: Devreye alınmış > Konfigüre edilmiş > Hiçbiri
-        // Kısıtlı görüntüleme modunda (viewRestricted) tüm marker'lar yeşil
-        // görünür; durum bilgisi renkle gösterilmez.
-        let markerClass = 'inactive'; // Varsayılan kırmızı
+        // Status color scheme (requested):
+        // - Brown: never started (hiç girilmemiş)
+        // - Yellow: started / current ring (başlamış)
+        // - Blue: installed but not accepted (kurulum tamam, kabul yok)
+        // - Green: installed + officially accepted (kabul var)
+        // In restricted view we intentionally do not reveal per-location status.
+        let markerClass = 'untouched';
 
         if (viewRestricted) {
-          markerClass = 'active';
-        } else if (location.details.isActive) {
-          markerClass = 'active'; // Yeşil - en yüksek öncelik
+          markerClass = 'accepted';
+        } else if (location.details.isAccepted) {
+          markerClass = 'accepted';
+        } else if (location.details.isInstalled) {
+          markerClass = 'installed';
         } else if (location.details.isConfigured) {
-          markerClass = 'configured'; // Sarı - orta öncelik
+          markerClass = 'started';
         }
         
         // Özel icon oluştur
@@ -158,58 +346,76 @@ const MapComponent: React.FC<MapComponentProps> = ({
                 align-items: center;
                 justify-content: center;
               }
-              .location-marker.active .marker-inner {
+              .location-marker.accepted .marker-inner {
                 width: 16px;
                 height: 16px;
-                background: linear-gradient(135deg, #10b981, #059669);
+                background: linear-gradient(135deg, #22c55e, #16a34a);
                 border: 3px solid white;
                 border-radius: 50%;
-                box-shadow: 0 3px 10px rgba(16, 185, 129, 0.4);
+                box-shadow: 0 3px 10px rgba(34, 197, 94, 0.35);
                 position: relative;
                 z-index: 2;
               }
-              .location-marker.configured .marker-inner {
+              .location-marker.installed .marker-inner {
+                width: 16px;
+                height: 16px;
+                background: linear-gradient(135deg, #3b82f6, #2563eb);
+                border: 3px solid white;
+                border-radius: 50%;
+                box-shadow: 0 3px 10px rgba(59, 130, 246, 0.35);
+                position: relative;
+                z-index: 2;
+              }
+              .location-marker.started .marker-inner {
                 width: 16px;
                 height: 16px;
                 background: linear-gradient(135deg, #f59e0b, #d97706);
                 border: 3px solid white;
                 border-radius: 50%;
-                box-shadow: 0 3px 10px rgba(245, 158, 11, 0.4);
+                box-shadow: 0 3px 10px rgba(245, 158, 11, 0.35);
                 position: relative;
                 z-index: 2;
               }
-              .location-marker.inactive .marker-inner {
+              .location-marker.untouched .marker-inner {
                 width: 16px;
                 height: 16px;
-                background: linear-gradient(135deg, #ef4444, #dc2626);
+                background: linear-gradient(135deg, #92400e, #78350f);
                 border: 3px solid white;
                 border-radius: 50%;
-                box-shadow: 0 3px 10px rgba(239, 68, 68, 0.4);
+                box-shadow: 0 3px 10px rgba(120, 53, 15, 0.35);
                 position: relative;
                 z-index: 2;
               }
-              .location-marker.active .marker-pulse {
+              .location-marker.accepted .marker-pulse {
                 position: absolute;
                 width: 24px;
                 height: 24px;
                 border-radius: 50%;
-                background: rgba(16, 185, 129, 0.3);
+                background: rgba(34, 197, 94, 0.22);
                 animation: pulse 2s infinite;
               }
-              .location-marker.configured .marker-pulse {
+              .location-marker.installed .marker-pulse {
                 position: absolute;
                 width: 24px;
                 height: 24px;
                 border-radius: 50%;
-                background: rgba(245, 158, 11, 0.3);
+                background: rgba(59, 130, 246, 0.22);
                 animation: pulse 2s infinite;
               }
-              .location-marker.inactive .marker-pulse {
+              .location-marker.started .marker-pulse {
                 position: absolute;
                 width: 24px;
                 height: 24px;
                 border-radius: 50%;
-                background: rgba(239, 68, 68, 0.3);
+                background: rgba(245, 158, 11, 0.22);
+                animation: pulse 2s infinite;
+              }
+              .location-marker.untouched .marker-pulse {
+                position: absolute;
+                width: 24px;
+                height: 24px;
+                border-radius: 50%;
+                background: rgba(146, 64, 14, 0.18);
                 animation: pulse 2s infinite;
               }
               @keyframes pulse {
@@ -293,9 +499,15 @@ const MapComponent: React.FC<MapComponentProps> = ({
                 Konfig: ${location.details.isConfigured ? 'Yapıldı' : 'Yapılmadı'}
               </span>
             </div>
-            <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #e5e7eb; font-weight: 500;">
-              Durum: <span style="color: ${location.details.isConfigured ? '#92400e' : (location.details.isActive ? '#065f46' : '#991b1b')};">
-                ${location.details.isConfigured ? 'Konfigüre Edildi' : (location.details.isActive ? 'Aktif' : 'Pasif')}
+            <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #e5e7eb; font-weight: 600;">
+              Durum: <span style="color: ${location.details.isAccepted ? '#166534' : (location.details.isInstalled ? '#1d4ed8' : (location.details.isConfigured ? '#92400e' : '#78350f'))};">
+                ${location.details.isAccepted
+                  ? 'Kabul Edildi'
+                  : (location.details.isInstalled
+                    ? 'Kurulum Tamam (Kabul Bekliyor)'
+                    : (location.details.isConfigured
+                      ? 'Başlandı (Ring)'
+                      : 'Hiç Girilmedi'))}
               </span>
             </div>
           </div>
@@ -307,9 +519,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
         });
 
         // Click event ekle
-        if (onLocationSelect) {
+        if (onLocationSelectRef.current) {
           marker.on('click', () => {
-            onLocationSelect(location);
+            try { onLocationSelectRef.current?.(location); } catch { /* ignore */ }
           });
         }
 
@@ -319,23 +531,40 @@ const MapComponent: React.FC<MapComponentProps> = ({
       }
 
       // Haritayı lokasyonlara göre merkeze al (sadece focus yoksa)
-      if (selectedRegion !== 0 && locations.length > 0 && markersRef.current.length > 0 && !focusLocation) {
+      // IMPORTANT: Do this only once per region selection; otherwise frequent parent re-renders
+      // (e.g. live polling) will constantly reset the camera and cause tile "flash".
+      if (
+        selectedRegion !== 0 &&
+        locations.length > 0 &&
+        markersRef.current.length > 0 &&
+        !focusLocation &&
+        didFitMarkersForRegionRef.current !== selectedRegion
+      ) {
+        didFitMarkersForRegionRef.current = selectedRegion;
         const group = L.featureGroup(markersRef.current);
         mapInstance.current.fitBounds(group.getBounds(), { padding: [20, 20] });
       }
     };
 
     updateMarkers();
-  }, [locations, onLocationSelect, focusLocation, viewRestricted]);
+  }, [mapReady, locations, focusLocation, viewRestricted, selectedRegion]);
 
   // Draw active route line on map
   useEffect(() => {
     const drawRoute = async () => {
-      if (!mapInstance.current || !activeRoute || activeRoute.length < 2) {
+      if (!mapReady || !mapInstance.current || !activeRoute || activeRoute.length < 2) {
         // Clear existing route line
         if (routeLineRef.current) {
           mapInstance.current?.removeLayer(routeLineRef.current);
           routeLineRef.current = null;
+        }
+
+        // Clear existing route markers
+        if (routeMarkersRef.current.length > 0) {
+          routeMarkersRef.current.forEach((m) => {
+            try { mapInstance.current?.removeLayer(m); } catch { /* ignore */ }
+          });
+          routeMarkersRef.current = [];
         }
         return;
       }
@@ -345,6 +574,14 @@ const MapComponent: React.FC<MapComponentProps> = ({
       // Remove previous route line
       if (routeLineRef.current) {
         mapInstance.current.removeLayer(routeLineRef.current);
+      }
+
+      // Remove previous route markers
+      if (routeMarkersRef.current.length > 0) {
+        routeMarkersRef.current.forEach((m) => {
+          try { mapInstance.current.removeLayer(m); } catch { /* ignore */ }
+        });
+        routeMarkersRef.current = [];
       }
 
       // Create polyline from route locations
@@ -362,7 +599,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
       activeRoute.forEach((loc, idx) => {
         const isCompleted = idx < currentRouteIndex;
         const isCurrent = idx === currentRouteIndex;
-        const isUpcoming = idx > currentRouteIndex;
 
         const markerColor = isCompleted ? '#10B981' : (isCurrent ? '#F59E0B' : '#6B7280');
         const markerIcon = L.divIcon({
@@ -411,6 +647,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
             </div>
           `)
           .addTo(mapInstance.current);
+
+        routeMarkersRef.current.push(marker);
       });
 
       // Fit map to show entire route
@@ -419,40 +657,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
     };
 
     drawRoute();
-  }, [activeRoute, currentRouteIndex]);
-
-  useEffect(() => {
-    const drawRoute = async () => {
-      if (!mapInstance.current) return;
-      const L = (await import('leaflet')) as any;
-
-      // Remove existing route line
-      if (routeLineRef.current) {
-        mapInstance.current.removeLayer(routeLineRef.current);
-        routeLineRef.current = null;
-      }
-
-      // Draw new route line if active route exists
-      if (activeRoute && activeRoute.length > 1) {
-        const latlngs = activeRoute.map(loc => loc.coordinates);
-        
-        routeLineRef.current = L.polyline(latlngs, {
-          color: '#3b82f6', // blue
-          weight: 4,
-          opacity: 0.7,
-          dashArray: '10, 10'
-        }).addTo(mapInstance.current);
-
-        // Optionally fit bounds to show entire route
-        if (activeRoute.length > 0) {
-          const bounds = L.latLngBounds(latlngs);
-          mapInstance.current.fitBounds(bounds, { padding: [50, 50] });
-        }
-      }
-    };
-
-    drawRoute();
-  }, [activeRoute]);
+  }, [mapReady, activeRoute, currentRouteIndex]);
 
   // Show user's current location on map
   useEffect(() => {
@@ -702,33 +907,135 @@ const MapComponent: React.FC<MapComponentProps> = ({
     const node = svgRef.current;
     if (!node) return;
 
+    const getRegionCounts = (locs: any[]) => {
+      const total = locs.length;
+      const accepted = locs.filter((l: any) => l?.details && l.details.isAccepted).length;
+      const installed = locs.filter((l: any) => l?.details && !l.details.isAccepted && l.details.isInstalled).length;
+      const started = locs.filter((l: any) => l?.details && !l.details.isAccepted && !l.details.isInstalled && l.details.isConfigured).length;
+      const untouched = Math.max(0, total - accepted - installed - started);
+      return { total, accepted, installed, started, untouched };
+    };
+
+    // Region coloring logic:
+    // - If %100 accepted => green
+    // - Otherwise choose the dominant status among: installed (blue), started (yellow), untouched (brown)
+    //   (accepted is ignored unless it's 100%).
+    const getPureRegionColors = (counts: { total: number; accepted: number; installed: number; started: number; untouched: number }) => {
+      if (!counts.total) return null;
+      if (counts.accepted === counts.total) return { fill: '#22c55e', stroke: '#16a34a' };
+
+      const dominant = Math.max(counts.installed, counts.started, counts.untouched);
+      if (dominant <= 0) return null;
+
+      // tie-break order: installed > started > untouched
+      if (counts.installed === dominant) return { fill: '#3b82f6', stroke: '#2563eb' };
+      if (counts.started === dominant) return { fill: '#f59e0b', stroke: '#d97706' };
+      return { fill: '#92400e', stroke: '#78350f' };
+    };
+
+    const regionTitles: Record<string, string> = {
+      '1': '1. Bölge Müdürlüğü - İstanbul / Avrupa',
+      '2': '2. Bölge Müdürlüğü - Bursa',
+      '3': '3. Bölge Müdürlüğü - İzmir',
+      '4': '4. Bölge Müdürlüğü - İstanbul / Anadolu',
+      '5': '5. Bölge Müdürlüğü - Sakarya',
+      '6': '6. Bölge Müdürlüğü - Kütahya',
+      '7': '7. Bölge Müdürlüğü - Isparta',
+      '8': '8. Bölge Müdürlüğü - Ankara',
+      '9': '9. Bölge Müdürlüğü - Konya',
+      '10': '10. Bölge Müdürlüğü - Samsun',
+      '11': '11. Bölge Müdürlüğü - Kayseri',
+      '12': '12. Bölge Müdürlüğü - Gaziantep',
+      '13': '13. Bölge Müdürlüğü - Elazığ',
+      '14': '14. Bölge Müdürlüğü - Trabzon',
+      '15': '15. Bölge Müdürlüğü - Erzurum',
+      '16': '16. Bölge Müdürlüğü - Batman',
+      '17': '17. Bölge Müdürlüğü - Van',
+      '18': '18. Bölge Müdürlüğü - Adana',
+      '19': '19. Bölge Müdürlüğü - Antalya',
+      '20': '20. Bölge Müdürlüğü - Edirne',
+      '21': '21. Bölge Müdürlüğü - Denizli',
+      '22': '22. Bölge Müdürlüğü - Kastamonu',
+    };
+
     const labelEl = document.createElement('div');
     labelEl.className = 'region-label';
     labelEl.style.display = 'none';
     document.body.appendChild(labelEl);
+
+    const canHover = typeof window !== 'undefined'
+      ? window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches
+      : false;
 
     const handleClick = (e: Event) => {
       const target = e.currentTarget as HTMLElement;
       const regionAttr = target.getAttribute('data-region') || target.dataset.region;
       if (!regionAttr) return;
       const regionId = Number(regionAttr);
-      if (!Number.isNaN(regionId) && onRegionSelect) onRegionSelect(regionId);
+      if (Number.isNaN(regionId)) return;
+
+      // Keep old behavior (selection) but also show accepted-only popup.
+      if (onRegionSelect) onRegionSelect(regionId);
+
+      // On touch devices there is no reliable mouseleave; ensure no lingering dim styles.
+      try {
+        const allRegions = node.querySelectorAll('.svg-region');
+        allRegions.forEach(el => {
+          (el as HTMLElement).style.filter = '';
+          (el as HTMLElement).style.opacity = '';
+        });
+      } catch {
+        // ignore
+      }
+
+      try {
+        const me = e as unknown as MouseEvent;
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 0;
+        const x = me?.clientX ?? 0;
+        const y = me?.clientY ?? 0;
+        const align: 'left' | 'center' | 'right' = !vw
+          ? 'center'
+          : x < vw * 0.33
+            ? 'left'
+            : x > vw * 0.66
+              ? 'right'
+              : 'center';
+
+        const regionObj = regions?.find(r => r.id === regionId);
+        const regionLocs = (regionObj?.locations || []) as any[];
+        const counts = getRegionCounts(regionLocs);
+        const locations = regionLocs as Location[];
+        const accepted = regionLocs.filter((l: any) => l?.details && l.details.isAccepted) as Location[];
+        const safePct = (n: number) => (counts.total ? Math.round((n / counts.total) * 100) : 0);
+        const perc = {
+          accepted: safePct(counts.accepted),
+          installed: safePct(counts.installed),
+          started: safePct(counts.started),
+          untouched: safePct(counts.untouched),
+        };
+        const title = regionTitles[regionAttr] || `Bölge ${regionAttr}`;
+        setSvgAcceptedPopup({ regionId, title, x, y, align, locations, accepted, counts, perc });
+      } catch {
+        // ignore
+      }
     };
 
     const handleMouseEnter = (e: MouseEvent) => {
       const target = e.currentTarget as HTMLElement;
       target.classList.add('svg-region--hover');
-      // Karart: Diğer bölgeleri siyah-beyaz yap
-      const allRegions = node.querySelectorAll('.svg-region');
-      allRegions.forEach(el => {
-        if (el !== target) {
-          (el as HTMLElement).style.filter = 'grayscale(1) brightness(0.7)';
-          (el as HTMLElement).style.opacity = '0.55';
-        } else {
-          (el as HTMLElement).style.filter = '';
-          (el as HTMLElement).style.opacity = '1';
-        }
-      });
+      // Hover dimming only makes sense on desktop; on mobile it tends to get "stuck".
+      if (canHover) {
+        const allRegions = node.querySelectorAll('.svg-region');
+        allRegions.forEach(el => {
+          if (el !== target) {
+            (el as HTMLElement).style.filter = 'grayscale(1) brightness(0.85)';
+            (el as HTMLElement).style.opacity = '0.75';
+          } else {
+            (el as HTMLElement).style.filter = '';
+            (el as HTMLElement).style.opacity = '1';
+          }
+        });
+      }
 
       const regionAttr = target.getAttribute('data-region') || target.dataset.region;
       // Bölge istatistiklerine göre fareyle üzerine gelme rengini hesaplayın ve uygulayın (yapılandırılmış / etkin)
@@ -739,130 +1046,36 @@ const MapComponent: React.FC<MapComponentProps> = ({
             const regionId = Number(regionAttr);
             const regionObj = regions.find(r => r.id === regionId);
             if (regionObj && regionObj.locations && regionObj.locations.length > 0) {
-              const total = regionObj.locations.length;
-              const configuredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured).length;
-              const activeConfiguredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured && l.details.isActive).length;
-
-              // Fareyle üzerine gelme rengine karar verin: çok sayıda etkin+yapılandırılmışsa yeşil, bazıları yapılandırılmışsa turuncu, değilse kırmızı
-              let hoverFill = '#814011ff'; // amber default
-              let hoverStroke = '#612f09ff';
-              if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.7) { // yüzde 70'den fazlası aktif ve konfigüre
-                hoverFill = '#085f42ff'; // green
-                hoverStroke = '#053122ff';
-              }
-              else if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.4) {
-                hoverFill = '#10b981';
-                hoverStroke = '#059669';
-              }
-              else if (configuredCount === 0) {
-                hoverFill = '#ef4444'; // red
-                hoverStroke = '#b91c1c';
-              }
+              const counts = getRegionCounts(regionObj.locations as any[]);
+              const pure = getPureRegionColors(counts);
 
               // store original fill/stroke so we can restore on mouseleave
-              if (!target.dataset.originalFill) target.dataset.originalFill = (target.getAttribute('fill') || '');
-              if (!target.dataset.originalStroke) target.dataset.originalStroke = (target.getAttribute('stroke') || '');
+              if (target.dataset.originalFill === undefined) target.dataset.originalFill = (target.getAttribute('fill') || '');
+              if (target.dataset.originalStroke === undefined) target.dataset.originalStroke = (target.getAttribute('stroke') || '');
 
-              // apply hover colors
+              // apply hover colors only if region is 100% a single status
               try {
-                target.setAttribute('fill', hoverFill);
-                if (hoverStroke) target.setAttribute('stroke', hoverStroke);
-                (target as HTMLElement).style.filter = 'drop-shadow(0 6px 18px rgba(0,0,0,0.9)) saturate(120%)';
-                (target as HTMLElement).style.opacity = '0.98';
-              } catch (e) { console.debug('MapComponent: failed to apply hover attributes to svg element', e); }
+                if (pure) {
+                  target.setAttribute('fill', pure.fill);
+                  target.setAttribute('stroke', pure.stroke);
+                }
+                if (canHover) {
+                  (target as HTMLElement).style.filter = 'drop-shadow(0 6px 18px rgba(0,0,0,0.9)) saturate(120%)';
+                  (target as HTMLElement).style.opacity = '0.98';
+                }
+              } catch (e) {
+                console.debug('MapComponent: failed to apply hover attributes to svg element', e);
+              }
             }
           }
-        } catch (err) {
+        } catch {
           // ignore
         }
       }
 
-      // label logic (human-friendly names)
-      if (regionAttr === '2') {
-        labelEl.textContent = '2. Bölge Müdürlüğü - Bursa';
-        labelEl.style.display = 'block';
-      } else if (regionAttr === '1') {
-        labelEl.textContent = '1. Bölge Müdürlüğü - İstanbul / Avrupa';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '3') {  
-        labelEl.textContent = '3. Bölge Müdürlüğü - İzmir';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '4') {  
-        labelEl.textContent = '4. Bölge Müdürlüğü - İstanbul / Anadolu';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '5') {  
-        labelEl.textContent = '5. Bölge Müdürlüğü - Sakarya';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '6') {  
-        labelEl.textContent = '6. Bölge Müdürlüğü - Kütahya';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '7') {  
-        labelEl.textContent = '7. Bölge Müdürlüğü - Isparta';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '8') {  
-        labelEl.textContent = '8. Bölge Müdürlüğü - Ankara';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '9') {  
-        labelEl.textContent = '9. Bölge Müdürlüğü - Konya';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '10') {  
-        labelEl.textContent = '10. Bölge Müdürlüğü - Samsun';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '11') {
-        labelEl.textContent = '11. Bölge Müdürlüğü - Kayseri';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '12') {
-        labelEl.textContent = '12. Bölge Müdürlüğü - Gaziantep';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '13') {
-        labelEl.textContent = '13. Bölge Müdürlüğü - Elazığ';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '14') {
-        labelEl.textContent = '14. Bölge Müdürlüğü - Trabzon';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '15') {
-        labelEl.textContent = '15. Bölge Müdürlüğü - Erzurum';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '16') {
-        labelEl.textContent = '16. Bölge Müdürlüğü - Batman';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '17') {
-        labelEl.textContent = '17. Bölge Müdürlüğü - Van';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '18') {
-        labelEl.textContent = '18. Bölge Müdürlüğü - Adana';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '19') {
-        labelEl.textContent = '19. Bölge Müdürlüğü - Antalya';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '20') {
-        labelEl.textContent = '20. Bölge Müdürlüğü - Edirne';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '21') {
-        labelEl.textContent = '21. Bölge Müdürlüğü - Denizli';
-        labelEl.style.display = 'block';
-      }
-      else if (regionAttr === '22') {
-        labelEl.textContent = '22. Bölge Müdürlüğü - Kastamonu';
+      const title = regionAttr ? regionTitles[regionAttr] : undefined;
+      if (title) {
+        labelEl.textContent = title;
         labelEl.style.display = 'block';
       }
     };
@@ -902,7 +1115,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
           if (compS) target.setAttribute('stroke', compS);
           else target.removeAttribute('stroke');
         }
-  } catch (err) { console.debug('MapComponent: error computing default region colors', err); }
+      } catch (err) {
+        console.debug('MapComponent: error restoring svg region colors', err);
+      }
 
       // Tüm bölgeleri eski haline getir
       const allRegions = node.querySelectorAll('.svg-region');
@@ -921,52 +1136,68 @@ const MapComponent: React.FC<MapComponentProps> = ({
       el.addEventListener('mouseleave', handleMouseLeave as any);
     });
 
-    // Compute and apply default (non-hover) completion colors for each region element so
-    // users can see green/orange/red states without hovering. Store computed colors
-    // in data-* attributes so mouseleave can restore to them.
-    try {
-      elements.forEach(el => {
-        const regionAttr = el.getAttribute('data-region') || el.dataset.region;
-        if (!regionAttr || !regions) return;
-        const regionId = Number(regionAttr);
-        const regionObj = regions.find(r => r.id === regionId);
-        if (!regionObj || !regionObj.locations || regionObj.locations.length === 0) return;
+    const activeSet = new Set<number>((activeWorkRegionIds || []).filter((n: any) => Number.isFinite(Number(n))).map((n: any) => Number(n)));
 
-        let defaultFill = '#814011ff';
-        let defaultStroke = '#612f09ff';
+    const applyDefaultRegionColors = (els: HTMLElement[]) => {
+      // Apply region colors based on dominant status rule.
+      try {
+        els.forEach(el => {
+          const regionAttr = el.getAttribute('data-region') || el.dataset.region;
+          if (!regionAttr || !regions) return;
+          const regionId = Number(regionAttr);
+          const regionObj = regions.find(r => r.id === regionId);
+          if (!regionObj || !regionObj.locations || regionObj.locations.length === 0) return;
 
-        if (viewRestricted) {
-          // Kısıtlı mod: tüm bölgeler aynı yeşil renkte
-          defaultFill = '#10b981';
-          defaultStroke = '#059669';
-        } else {
-          const total = regionObj.locations.length;
-          const configuredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured).length;
-          const activeConfiguredCount = regionObj.locations.filter((l: any) => l.details && l.details.isConfigured && l.details.isActive).length;
+          // Active work pulse class
+          if (activeSet.has(regionId)) el.classList.add('svg-region--active-work');
+          else el.classList.remove('svg-region--active-work');
 
-          if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.7) {
-            defaultFill = '#085f42ff';
-            defaultStroke = '#053122ff';
+          // Cache original (base) attributes once.
+          if (el.dataset.baseFill === undefined) el.dataset.baseFill = (el.getAttribute('fill') || '');
+          if (el.dataset.baseStroke === undefined) el.dataset.baseStroke = (el.getAttribute('stroke') || '');
+
+          if (viewRestricted) {
+            el.dataset.computedFill = '#22c55e';
+            el.dataset.computedStroke = '#16a34a';
+            el.setAttribute('fill', '#22c55e');
+            el.setAttribute('stroke', '#16a34a');
+            (el as HTMLElement).style.opacity = '0.95';
+            return;
           }
-          else if (activeConfiguredCount > 0 && activeConfiguredCount / total >= 0.4) {
-            defaultFill = '#10b981';
-            defaultStroke = '#059669';
-          }
-          else if (configuredCount === 0) {
-            defaultFill = '#ef4444';
-            defaultStroke = '#b91c1c';
-          }
-        }
 
-        el.dataset.computedFill = defaultFill;
-        el.dataset.computedStroke = defaultStroke;
-        try {
-          el.setAttribute('fill', defaultFill);
-          el.setAttribute('stroke', defaultStroke);
-          (el as HTMLElement).style.opacity = '0.95';
-  } catch (e) { console.debug('MapComponent: svg hover applyAttributes error', e); }
-      });
-  } catch (e) { console.debug('MapComponent: svg default color application error', e); }
+          const counts = getRegionCounts(regionObj.locations as any[]);
+          const pure = getPureRegionColors(counts);
+
+          if (!pure) {
+            // no locations / no dominant: revert to base
+            delete el.dataset.computedFill;
+            delete el.dataset.computedStroke;
+            const bf = el.dataset.baseFill || '';
+            const bs = el.dataset.baseStroke || '';
+            if (bf) el.setAttribute('fill', bf);
+            else el.removeAttribute('fill');
+            if (bs) el.setAttribute('stroke', bs);
+            else el.removeAttribute('stroke');
+            (el as HTMLElement).style.opacity = '0.95';
+            return;
+          }
+
+          el.dataset.computedFill = pure.fill;
+          el.dataset.computedStroke = pure.stroke;
+          try {
+            el.setAttribute('fill', pure.fill);
+            el.setAttribute('stroke', pure.stroke);
+            (el as HTMLElement).style.opacity = '0.95';
+          } catch (e) {
+            console.debug('MapComponent: svg default applyAttributes error', e);
+          }
+        });
+      } catch (e) {
+        console.debug('MapComponent: svg default color application error', e);
+      }
+    };
+
+    applyDefaultRegionColors(elements);
 
     // If new SVG markup will be pasted in by user later, observe mutations and rewire
     const mo = new MutationObserver(() => {
@@ -984,6 +1215,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
         el.addEventListener('mousemove', handleMouseMove as any);
         el.addEventListener('mouseleave', handleMouseLeave as any);
       });
+      applyDefaultRegionColors(elements);
     });
     mo.observe(node, { childList: true, subtree: true });
 
@@ -997,7 +1229,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
       mo.disconnect();
       labelEl.remove();
     };
-  }, [onRegionSelect, regions, viewRestricted]);
+  }, [onRegionSelect, regions, viewRestricted, activeWorkRegionIds]);
 
   // Highlight selected region on the inline SVG by adding a class .svg-region--selected
   useEffect(() => {
@@ -1056,13 +1288,27 @@ const MapComponent: React.FC<MapComponentProps> = ({
     focusOnLocation();
   }, [focusLocation]);
 
-  // compute deployment percentage for current locations view
+  // 4-state status summary for current locations view
+  // - Brown: hiç girilmemiş
+  // - Yellow: başlamış / ring
+  // - Blue: kurulum tamam ama kabul yok
+  // - Green: kurulum tamam ve resmi kabul
   const totalShown = (locations || []).length;
-  const deployedCount = (locations || []).filter(l => !!l.details && !!l.details.isActive).length;
-  const deployedPercent = totalShown > 0 ? Math.round((deployedCount / totalShown) * 100) : 0;
-  // user-requested exact colors:
-  // >=70: #085f42ff, >=40: #10b981, else: #ef4444
-  const deployedColor = deployedPercent >= 70 ? '#085f42ff' : (deployedPercent >= 40 ? '#10b981' : '#ef4444');
+  const acceptedCount = (locations || []).filter(l => !!l.details && !!l.details.isAccepted).length;
+  const installedCount = (locations || []).filter(
+    l => !!l.details && !l.details.isAccepted && !!l.details.isInstalled,
+  ).length;
+  const startedCount = (locations || []).filter(
+    l => !!l.details && !l.details.isAccepted && !l.details.isInstalled && !!l.details.isConfigured,
+  ).length;
+  const untouchedCount = Math.max(0, totalShown - acceptedCount - installedCount - startedCount);
+
+  const acceptedPercent = totalShown > 0 ? Math.round((acceptedCount / totalShown) * 100) : 0;
+  const installedPercent = totalShown > 0 ? Math.round((installedCount / totalShown) * 100) : 0;
+  const startedPercent = totalShown > 0 ? Math.round((startedCount / totalShown) * 100) : 0;
+  const untouchedPercent = totalShown > 0 ? Math.round((untouchedCount / totalShown) * 100) : 0;
+
+  const summaryColor = totalShown > 0 ? '#22c55e' : '#64748b';
 
   // If you prefer to use an inline SVG instead of the Leaflet map,
   // paste your full SVG markup below inside the div with ref={svgRef}.
@@ -1070,37 +1316,75 @@ const MapComponent: React.FC<MapComponentProps> = ({
   // like data-region="1" or data-region="2" so the click wiring can call onRegionSelect.
   return (
     <div className="relative w-full h-full">
+      {!useInlineSvg && (
+        <div
+          ref={mapRef}
+          className="w-full h-full rounded-lg shadow-lg"
+          style={{ overflow: 'hidden' }}
+        />
+      )}
+
+      {/* Compact accepted % badge (bottom-right) */}
+      {!viewRestricted && hideSummaryOverlay && (
+        <div
+          style={{
+            position: 'absolute',
+            right: 8,
+            bottom: 8,
+            zIndex: 6,
+            background: 'rgba(255,255,255,0.92)',
+            border: '1px solid rgba(15, 23, 42, 0.10)',
+            borderRadius: 999,
+            padding: '6px 10px',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.10)',
+            fontSize: 14,
+            fontWeight: 800,
+            color: summaryColor,
+            fontVariantNumeric: 'tabular-nums',
+            lineHeight: 1,
+          }}
+          aria-label="Resmi kabul yüzdesi"
+          title="Resmi kabul yüzdesi"
+        >
+          {acceptedPercent}%
+        </div>
+      )}
+
       {/* Deployment summary overlay (top-right) - collapsible on small screens */}
-      {!viewRestricted && (
+      {!viewRestricted && !hideSummaryOverlay && (
       <div style={{ position: 'absolute', right: 8, bottom: 8 }}>
         {overlayOpen ? (
           <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 8, boxShadow: '0 6px 18px rgba(0,0,0,0.12)', padding: '8px 10px', minWidth: 270, display: 'flex', flexDirection: 'column', gap: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: '#1f2937' }}>Devreye Alınma Oranı</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#1f2937' }}>Resmi Kabul Oranı</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ fontSize: 20, fontWeight: 700, color: deployedPercent >= 70 ? '#085f42ff' : (deployedPercent >= 40 ? '#10b981' : '#ef4444') }}>{deployedPercent}%</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: summaryColor }}>{acceptedPercent}%</div>
                 <button onClick={() => setOverlayOpen(false)} aria-label="Kapat paneli" title="Kapat" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 18, padding: 6 }}>✕</button>
               </div>
             </div>
             <div style={{ height: 10, background: '#e6e9ee', borderRadius: 6, overflow: 'hidden' }} aria-hidden>
-              <div style={{ width: `${deployedPercent}%`, height: '100%', background: deployedColor, transition: 'width 400ms ease' }} />
+              <div style={{ width: `${acceptedPercent}%`, height: '100%', background: summaryColor, transition: 'width 400ms ease' }} />
             </div>
-            <div style={{ fontSize: 18, color: '#475569' }}>{deployedCount} / {totalShown} lokasyon</div>
+            <div style={{ fontSize: 18, color: '#475569' }}>{acceptedCount} / {totalShown} lokasyon</div>
             {/* Legend */}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ width: 12, height: 12, background: '#085f42ff', borderRadius: 3, display: 'inline-block' }} />
-                    <span style={{ fontSize: 18, color: '#374151' }}>≥ 70% — İyi</span>
+                    <span style={{ width: 12, height: 12, background: '#22c55e', borderRadius: 3, display: 'inline-block' }} />
+                    <span style={{ fontSize: 18, color: '#374151' }}>Kabul Edildi — {acceptedCount} ({acceptedPercent}%)</span>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ width: 12, height: 12, background: '#10b981', borderRadius: 3, display: 'inline-block' }} />
-                    <span style={{ fontSize: 18, color: '#374151' }}>40–69% — Orta</span>
+                    <span style={{ width: 12, height: 12, background: '#3b82f6', borderRadius: 3, display: 'inline-block' }} />
+                    <span style={{ fontSize: 18, color: '#374151' }}>Kurulum Tamam (Kabul Bekliyor) — {installedCount} ({installedPercent}%)</span>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ width: 12, height: 12, background: '#814011ff', borderRadius: 3, display: 'inline-block' }} />
-                    <span style={{ fontSize: 18, color: '#374151' }}>&lt; 40% — Düşük</span>
+                    <span style={{ width: 12, height: 12, background: '#f59e0b', borderRadius: 3, display: 'inline-block' }} />
+                    <span style={{ fontSize: 18, color: '#374151' }}>Başlandı (Ring) — {startedCount} ({startedPercent}%)</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <span style={{ width: 12, height: 12, background: '#92400e', borderRadius: 3, display: 'inline-block' }} />
+                    <span style={{ fontSize: 18, color: '#374151' }}>Hiç Girilmedi — {untouchedCount} ({untouchedPercent}%)</span>
                   </div>
                 </div>
               </div>
@@ -1110,17 +1394,24 @@ const MapComponent: React.FC<MapComponentProps> = ({
           // compact pill for small viewports — minimal footprint so map controls are still accessible
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <button onClick={() => setOverlayOpen(true)} aria-label="Aç paneli" title="Aç" style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 9999, boxShadow: '0 6px 18px rgba(0,0,0,0.12)', padding: '8px 12px', minWidth: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, border: 'none', cursor: 'pointer' }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: deployedColor }}>{deployedPercent}%</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: summaryColor }}>{acceptedPercent}%</div>
             </button>
           </div>
         )}
       </div>
       )}
       {/* SVG container: paste your <svg>...</svg> markup inside this div */}
-      <div ref={svgRef} className="w-full h-full rounded-lg shadow-lg" style={{ overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg className="jss180 jss145" version="1.1" xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" viewBox="0 0 1000 424" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', maxWidth: '100%', maxHeight: '100%' }}>
+      {useInlineSvg && (
+      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        <div ref={svgRef} className="w-full h-full rounded-lg shadow-lg" style={{ overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg className="jss180 jss145" version="1.1" xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" viewBox="0 0 1000 424" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', maxWidth: '100%', maxHeight: '100%' }}>
           <defs>
-            <style>{`.svg-region { transition: filter 160ms, opacity 160ms; cursor: pointer; } .svg-region--hover { filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 1)) saturate(120%); opacity: 0.98; } .svg-region--selected { filter: drop-shadow(0 10px 30px rgba(0,0,0,0.35)) saturate(140%); opacity: 1; stroke: rgba(0,0,0,0.18); stroke-width: 1.8px; } .region-label { position: absolute; pointer-events: none; background: rgba(255, 255, 255, 0.96); padding:6px 10px; border-radius:8px; font-weight:700; font-size:12px; box-shadow:0 6px 18px rgba(255, 255, 255, 1); }`}</style>
+            <style>{`.svg-region { transition: filter 160ms, opacity 160ms; cursor: pointer; }
+.svg-region--hover { filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 1)) saturate(120%); opacity: 0.98; }
+.svg-region--selected { filter: drop-shadow(0 10px 30px rgba(0,0,0,0.35)) saturate(140%); opacity: 1; stroke: rgba(0,0,0,0.18); stroke-width: 1.8px; }
+@keyframes workPulse { 0%, 100% { filter: drop-shadow(0 0 0 rgba(34,197,94,0)); stroke: rgba(34,197,94,0.35); stroke-width: 2.2px; } 50% { filter: drop-shadow(0 0 18px rgba(34,197,94,0.95)); stroke: #22c55e; stroke-width: 4px; } }
+.svg-region--active-work { animation: workPulse 1.1s ease-in-out infinite; }
+.region-label { position: absolute; pointer-events: none; background: rgba(255, 255, 255, 0.96); padding:6px 10px; border-radius:8px; font-weight:700; font-size:12px; box-shadow:0 6px 18px rgba(255, 255, 255, 1); }`}</style>
           </defs>
           <path id="1-bolge-mudurlugu-istanbulavrupa" /*</svg>fill='#90CAF9'*/ data-region="1" className='svg-region st1' d="M179.4,60.9l-1.5-0.6l-1.3-0.2l-0.7,0.2l-0.3,0.7h-0.3l-0.5-0.4  l-5.2-1.1l-16.1-7.7l-11.1-4.9l-7.8-5l-1.9-1.8l-2.5,3.6h-0.4l1.5,5.3l0.6,4.5l-1.6,5.7l-0.7,4.3l0.7,5.4l0.6,4l0.6,0.5l1.1-0.1  l1.9-0.4l0.2,0.1l0.6,0.7l0.6,0.1h1.7l1.7,0.3l3.7,1.4l1.6,0.3l1.2,0.6l2.8,2.9l1.8,0.2l1-0.9l0.3-1.1l0.1-0.6l1,0.3l0.4,0.5  l-0.5,2.3l2,0.7l6.3-0.8l1.2,0.1l0.4,0.4l0.4,0.5l0.8,0.3l1.4,0.1l0.7-0.2l0.9-0.7l0.4-0.2l2.1-0.5l1-0.6l0.7-0.2l0.6-0.7l0.3-0.1  l0.4,0.3l1.3,0.1l0.9-0.6l-0.3-1.4l0.1-0.2l0.3-0.5l0.3-0.2l0.9-0.3l0.6-0.6l0.5-0.8l0.5-1.1l0.4-1.3l0.2-1.3l0.5-1l-0.4-0.4  l-1.1-1.5l0.3-0.1l1-0.6l1-1.2l0.7-1.3l0.5-2.1L179.4,60.9z M151.9,75.6l-0.4-1.2l-1.1-1.2l-0.1-0.3l0.6,0.1l1,0.8l0.4,1.2l-0.3,1.1  L151.9,75.6z"></path>
           <path id="2-bolge-mudurlugu-bursa" /*fill='#3F51B5'*/ data-region="2" className="svg-region st2" d="M223.5,108.4l-0.4-1.8l-7.4-2.7l-3.7,0.7l-9.6,3.6l-3,0.2l-2.5-0.8l0.4-2.4v-6.7l-0.9,0.4l-0.3-0.2l-0.4-0.7  l-0.6-0.5l-0.6,0.1l-1.2,0.9l-2,1.1l-2.2,0.8l-15.3,1.4l-1,0.5l-2.2,2.3l-1.5,0.9l-3.8,1.5l-1.9,1.2l-0.8,1.9l-0.3,0.8l3.2,0.7  l4.5,2.9l3,0.7h0.1v0.1l0.6-0.4h0.2v-0.1l1.3-1h2.7l1.1,0.2l1.1,0.8l1.1,1.1l0.7,0.7l-0.3,0.1l-0.8,0.3l-0.8,0.1l-1-0.4l-0.5,1.2  l-0.4,1.7l-0.4,0.9L177,121l-0.7,0.1l-3.9,0.1l-0.9-0.2l-0.8-0.2l-1.4-0.8l-0.7-0.4l-1.6-0.3l-1.4-0.1l-1.9-0.6l-1.1-0.1l-0.9,0.5  l-0.8,0.6l-2.9,0.5l-0.5,0.3l-0.5,0.5l-0.3,0.1l-0.8-0.5l-0.3,0.4l-2.2-1l-2.5-0.6h-2.4l-1.5,0.6v-0.2l3.6-1l-7.2,0.1l-2.8-0.4  l-7.3,0.3l-5,0.2l-4.5,1.7l-4.3,0.4l-1.6-0.5l-0.1-1.2l1.2-1.1l4.6-2.3l1.1-1.9l-1.3-1.5l-2.5-0.9l-8.7-1.4l-0.7,0.3l-0.2,0.2  l-0.2-0.1l-1.2-1.5l-0.6,0.9l-0.8-0.3l-0.8,0.4l-0.8,1l-0.5,0.4l-0.8,0.2v0.9l0.5,0.8l1.7,1.7l0.5,0.2l0.8,0.1l0.1,0.3l0.1,1.1  l0.7,1.1l0.5,0.3l0.5,0.3l0.3,1.4h0.7l0.8-0.4l2.5,0.9h0.3l-0.4,0.5l-2.7,1.5l-1.2,1.8l-1.3,0.3l-1.4-0.2l-1.2-0.5l-1.3,0.8  l-0.9-0.2l-1.4-0.7l-1.6-0.3l-0.9,0.2l-1,0.6l-0.4,0.3l-0.2,0.1v0.1l-0.3,0.1l-0.4,0.1h-1.3l-3.6-0.8l-3.1-1.4l-2.8-1.9l-1.9-2  l0.4,0.2l1.2-0.8l-1-2.4l-0.5-1.1l-1.1-0.7h-1l-1.8,1.2l-1,0.2l-1.9-0.1l-1.9-0.3l-2.5,0.1l-1.8,1.5l-1.2,1.5l-1.4,1.1l-1,0.2  l-2.8-0.2l-1.4-0.8l-0.7-0.2l-1.8,0.5l-4.5-0.4l-2.2,0.1l-1.3,1.1l-5.5,6.8l-0.6,0.5l-1.2,0.5l-0.5,0.3l-2.4,3.1l-0.8,0.9l-1.7,0.3  l-1.3,0.7l-1.9,0.2l0,0l-0.8,1.8l0.4,1.1v1.1l-0.2,1.3l-0.2,0.6l-0.3,0.2l-1.1,0.2l0.1,0.8l-0.2,0.6l-0.1,0.9l-0.1,0.5l-0.4,0.6  l-2.1,2.3l-2.3,1.1l-0.7,0.4l-2.8-0.9l-0.7,0.6l-1.1,2l-0.4,1.3l-0.4,0.8l-0.2,0.8v0.7l0.3,1.7l-0.6,3.3l-0.5,1.1l0.4,0.1l-2.3,0.4  v-0.6l-0.5-1l-1,0.5l-0.2-0.2l-1-0.3h-1.9l-1.1,0.3l-0.6,0.9l0.4,1l0.8,0.6l1.5,0.8l1.7,1.1l1.4,0.2l0.4-1.4l0.1-1.8l2.4-0.4  l0.5,0.1v0.3l-0.2,1.8v1.5l-0.1,0.3l-0.6,0.4v0.9l0.2,0.9l1,1.9l0.2,0.6l-0.4,3.6l-0.3,1.5l-2,1.9l-0.9,3.5l-1.3,3.6l0.3,1.7  l2.1,1.1l0.2,0.1h2.2l3.9-1l1.2,0.7l0.8-1.3l0.4-0.1l0.7-0.2l0.5-0.1l2.7,0.5h0.7l0.5-0.4l2.2-1.2h0.7l0.5-0.7l1.1-0.4l10.9-2  l7.2-1.3l1.4,0.9l1.1-0.5l1-1l1.1-0.4l1.3,0.2l0.6,0.4l0.3,0.7v1.3l-0.7,2.6l-0.1,0.8l-2.9,0.9l-1.2,0.9l0.5,1l-0.3,0.3l-0.6,0.2  l-2.2,0.1l0.1,1l-0.1,1.5l0.4,0.2l-5,4l-1,1.4l-1.1,0.6l-0.3,0.6l0.2-0.9l-0.8-0.5l-1.1,0.3l-0.4,0.8l-0.3,1.4l-0.8,0.8l1.5,0.7  l1.4,0.1l2.4-0.2l0.7,0.4l0.3,0.8l0.3,1.3l0.4,1.3l-0.1,0.8l0.9,1l1.1,0.8l0.6,0.3l11.5-8.2l1-1.2l0.9-1.6l1-1.3l1.3-0.8l1.7-0.7  l9.4-6.1l2.6,0.5l2.2,2l1.6,3.3l4.2-2.2l2.2,1.1l2.2,1.8l3.9,1.2l3.7-0.5l2,0.1l2,1l1,0.2l1.7-0.3l0.6-0.1l1.1,1.8l-1.5,2.6  l-0.7,2.7l2.5,1.2l3.9-1.4l0.5,0.3l0.4,0.8l4.3,4.8l2.6,6.1l2.7,1l2.3-1l2.3-0.4l2-1.3l1.4-1.9l2-0.3l2.2,0.2l2.1-0.2l2-0.6  l4.7-2.4l4.7,0.7l0.5-1l-0.1-1.8l-0.3-0.8l0.4-2l1.8-0.9l3.8-1.3l1.8-1.3l1.7-3.1l0.4-0.9l1.2-1.5l1.2-2l0.8-4.9l0.6-1.8l0.6-0.5  l0.5-1.1v-1.3l0.2-1.2l0.8-1.6l1.7,1.3l2.4,0.6l3.8,0.5l3.8-0.1l3.2-2l0.3-4.6l1-3l2.4-1.8l1.5-5.4l1-1l0.7-1.8l1-3.9l2.4-1.7  l5.3,2.1l1.7,0.3l1.8-0.3l1.5-0.7l1.5-0.2l2.9,0.6l3-1.2l-0.8-3.8l-1.4-1.2l-2.6-3.7l-0.1-3.2l1.4-6.8l5-5.2l1-2.1l-0.2-2l-1.2-1.5  l-0.2-2l0.6-1.6l0.6-2l0.2-2.1l0.9-1.8l0.9-1l1.1-0.9l3.1-1.6L223.5,108.4z M52.4,193.9l-0.2-0.1l0.3-0.1L52.4,193.9z"></path>
@@ -1245,8 +1536,144 @@ const MapComponent: React.FC<MapComponentProps> = ({
       <path id="_220599440" fill='white' className="st23" d="M533.9,393.1v-7.8h1v3.2h4v-3.2h1v7.8h-1v-3.7h-4v3.7H533.9z M545.3,392.4  c-0.4,0.3-0.7,0.5-1,0.6s-0.7,0.2-1.1,0.2c-0.6,0-1.1-0.2-1.4-0.5c-0.3-0.3-0.5-0.7-0.5-1.2c0-0.3,0.1-0.5,0.2-0.8  c0.1-0.2,0.3-0.4,0.5-0.5s0.4-0.2,0.7-0.3c0.2,0,0.5-0.1,0.8-0.1c0.8-0.1,1.3-0.2,1.7-0.3c0-0.1,0-0.2,0-0.2c0-0.4-0.1-0.7-0.3-0.8  c-0.2-0.2-0.6-0.3-1.1-0.3c-0.4,0-0.8,0.1-1,0.2c-0.2,0.2-0.4,0.4-0.5,0.8l-0.9-0.1c0.1-0.4,0.2-0.7,0.4-1c0.2-0.2,0.5-0.4,0.8-0.6  c0.4-0.1,0.8-0.2,1.3-0.2s0.9,0.1,1.2,0.2s0.5,0.3,0.7,0.4c0.1,0.2,0.2,0.4,0.3,0.6c0,0.2,0,0.5,0,0.9v1.3c0,0.9,0,1.4,0.1,1.7  c0,0.2,0.1,0.5,0.2,0.7h-1C545.4,392.9,545.3,392.7,545.3,392.4L545.3,392.4z M545.2,390.3c-0.3,0.1-0.9,0.3-1.6,0.4  c-0.4,0.1-0.7,0.1-0.8,0.2c-0.2,0.1-0.3,0.2-0.4,0.3c-0.1,0.1-0.1,0.3-0.1,0.5c0,0.3,0.1,0.5,0.3,0.6c0.2,0.2,0.5,0.3,0.8,0.3  c0.4,0,0.7-0.1,1-0.2c0.3-0.2,0.5-0.4,0.6-0.7c0.1-0.2,0.2-0.5,0.2-1C545.2,390.6,545.2,390.3,545.2,390.3z M549.7,392.3l0.1,0.8  c-0.3,0.1-0.5,0.1-0.7,0.1c-0.3,0-0.6-0.1-0.8-0.2s-0.3-0.3-0.4-0.4c-0.1-0.2-0.1-0.6-0.1-1.1v-3.2h-0.7v-0.7h0.7v-1.4l1-0.6v2h1  v0.7h-1v3.3c0,0.3,0,0.4,0,0.5s0.1,0.1,0.2,0.2c0.1,0,0.2,0.1,0.3,0.1C549.4,392.3,549.5,392.3,549.7,392.3z M554.3,392.4  c-0.4,0.3-0.7,0.5-1,0.6s-0.7,0.2-1.1,0.2c-0.6,0-1.1-0.2-1.4-0.5c-0.3-0.3-0.5-0.7-0.5-1.2c0-0.3,0.1-0.5,0.2-0.8  c0.1-0.2,0.3-0.4,0.5-0.5s0.4-0.2,0.7-0.3c0.2,0,0.5-0.1,0.8-0.1c0.8-0.1,1.3-0.2,1.7-0.3c0-0.1,0-0.2,0-0.2c0-0.4-0.1-0.7-0.3-0.8  c-0.2-0.2-0.6-0.3-1.1-0.3c-0.4,0-0.8,0.1-1,0.2c-0.2,0.2-0.4,0.4-0.5,0.8l-0.9-0.1c0.1-0.4,0.2-0.7,0.4-1c0.2-0.2,0.5-0.4,0.8-0.6  c0.4-0.1,0.8-0.2,1.3-0.2s0.9,0.1,1.2,0.2s0.5,0.3,0.7,0.4c0.1,0.2,0.2,0.4,0.3,0.6c0,0.2,0,0.5,0,0.9v1.3c0,0.9,0,1.4,0.1,1.7  c0,0.2,0.1,0.5,0.2,0.7h-1C554.4,392.9,554.4,392.7,554.3,392.4L554.3,392.4z M554.2,390.3c-0.3,0.1-0.9,0.3-1.6,0.4  c-0.4,0.1-0.7,0.1-0.8,0.2c-0.2,0.1-0.3,0.2-0.4,0.3c-0.1,0.1-0.1,0.3-0.1,0.5c0,0.3,0.1,0.5,0.3,0.6c0.2,0.2,0.5,0.3,0.8,0.3  c0.4,0,0.7-0.1,1-0.2c0.3-0.2,0.5-0.4,0.6-0.7c0.1-0.2,0.2-0.5,0.2-1C554.2,390.6,554.2,390.3,554.2,390.3z M556.5,395.3l-0.1-0.9  c0.2,0.1,0.4,0.1,0.5,0.1c0.2,0,0.4,0,0.5-0.1s0.2-0.2,0.3-0.3c0.1-0.1,0.2-0.3,0.3-0.7c0-0.1,0-0.1,0.1-0.2l-2.1-5.6h1l1.2,3.3  c0.2,0.4,0.3,0.8,0.4,1.3c0.1-0.4,0.2-0.9,0.4-1.3l1.2-3.3h1l-2.1,5.7c-0.2,0.6-0.4,1-0.5,1.3c-0.2,0.3-0.4,0.5-0.6,0.7  c-0.2,0.1-0.5,0.2-0.8,0.2C557,395.4,556.9,395.4,556.5,395.3z"></path>
       
 
-      </svg>
+          </svg>
+        </div>
+
+        {svgAcceptedPopup && (
+          <div
+            role="dialog"
+            aria-label="Kabul edilen lokasyonlar"
+            style={(() => {
+              const isMobile = typeof window !== 'undefined'
+                ? window.matchMedia && window.matchMedia('(max-width: 640px)').matches
+                : false;
+              // Always use a bottom-sheet style popup (desktop + mobile)
+              return {
+                position: 'fixed',
+                bottom: 12,
+                left: isMobile ? 12 : 'auto',
+                right: 12,
+                background: 'rgba(255,255,255,0.98)',
+                borderRadius: 12,
+                boxShadow: '0 12px 30px rgba(0,0,0,0.22)',
+                border: '1px solid rgba(15, 23, 42, 0.10)',
+                minWidth: 260,
+                maxWidth: isMobile ? 'calc(100vw - 24px)' : 460,
+                width: isMobile ? 'calc(100vw - 24px)' : 420,
+                padding: 12,
+                zIndex: 50,
+                maxHeight: '55vh',
+                overflow: 'auto',
+              } as React.CSSProperties;
+            })()}
+          >
+            {(() => {
+              const pulsing = Array.isArray(activeWorkRegionIds) && activeWorkRegionIds.includes(svgAcceptedPopup.regionId);
+              if (!pulsing || !onDismissActiveWorkRegion) return null;
+              return (
+                <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 8, paddingLeft: 18 }}>
+                  <button
+                    type="button"
+                    onClick={() => onDismissActiveWorkRegion(svgAcceptedPopup.regionId)}
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.06)',
+                      border: '1px solid rgba(15, 23, 42, 0.10)',
+                      borderRadius: 10,
+                      padding: '6px 10px',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      color: '#0f172a'
+                    }}
+                    title="Bu bölge için çalışma vurgusunu kapat"
+                    aria-label="Çalışma vurgusunu kapat"
+                  >
+                    Vurguyu kapat
+                  </button>
+                </div>
+              );
+            })()}
+
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', lineHeight: 1.2, paddingLeft: 18 }}>{svgAcceptedPopup.title}</div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '12px 150px 10px 1fr',
+                    rowGap: 2,
+                    columnGap: 6,
+                    alignItems: 'center',
+                    fontSize: 12,
+                    color: '#475569',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  <span />
+                  <span style={{ whiteSpace: 'nowrap' }}>Toplam</span>
+                  <span style={{ textAlign: 'center' }}>:</span>
+                  <span>{svgAcceptedPopup.counts.total}</span>
+
+                  <span style={{ width: 10, height: 10, borderRadius: 999, background: '#22c55e', display: 'inline-block', justifySelf: 'center' }} />
+                  <span style={{ whiteSpace: 'nowrap' }}>Kabul tamamlandı</span>
+                  <span style={{ textAlign: 'center' }}>:</span>
+                  <span>
+                    {svgAcceptedPopup.counts.accepted} (%{svgAcceptedPopup.perc.accepted})
+                  </span>
+
+                  <span />
+                  <span style={{ whiteSpace: 'nowrap' }}>Kabul tamamlanmayan</span>
+                  <span style={{ textAlign: 'center' }}>:</span>
+                  <span>
+                    {Math.max(0, svgAcceptedPopup.counts.total - svgAcceptedPopup.counts.accepted)} (%{Math.max(0, 100 - svgAcceptedPopup.perc.accepted)})
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setSvgAcceptedPopup(null)}
+                aria-label="Kapat"
+                title="Kapat"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16, padding: 6, lineHeight: 1 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ height: 1, background: 'rgba(15, 23, 42, 0.10)', margin: '10px 0' }} />
+
+            {svgAcceptedPopup.locations.length === 0 ? (
+              <div style={{ fontSize: 13, color: '#64748b' }}>Bu bölgede lokasyon yok.</div>
+            ) : (
+              <div style={{ maxHeight: 320, overflow: 'auto', paddingRight: 4 }}>
+                {svgAcceptedPopup.locations
+                  .slice()
+                  .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'tr'))
+                  .map(loc => (
+                    <div key={loc.id} style={{ padding: '8px 6px', borderRadius: 10, border: '1px solid rgba(15, 23, 42, 0.08)', marginBottom: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', alignItems: 'center', columnGap: 10 }}>
+                        <div style={{ minWidth: 0 }}>
+                          {(loc as any)?.details?.isAccepted ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ width: 10, height: 10, borderRadius: 999, background: '#22c55e', display: 'inline-block', flex: '0 0 auto' }} />
+                              <span style={{ fontSize: 12, fontWeight: 700, color: '#16a34a', whiteSpace: 'nowrap' }}>Kabul tamamlandı</span>
+                            </div>
+                          ) : (
+                            <div style={{ height: 18 }} />
+                          )}
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{loc.name}</div>
+                      </div>
+                      {loc.center ? (
+                        <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>{loc.center}</div>
+                      ) : null}
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+      )}
     </div>
   );
 };

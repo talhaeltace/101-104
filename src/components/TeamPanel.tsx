@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Users, MapPin, Navigation, CheckCircle2, Clock, X, RefreshCw, ChevronRight, Activity, Car, Briefcase, Timer, TrendingUp, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { formatDuration as formatMinutes } from '../lib/teamStatus';
+import type { Region } from '../data/regions';
+import { createTask, type Task } from '../lib/tasks';
 
 // Extended interface with detailed tracking fields
 export interface TeamMemberStatus {
@@ -42,7 +44,10 @@ interface CompletedLocationRecord {
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onFocusMember?: (lat: number, lng: number) => void;
+  onFocusMember?: (memberId: string, username: string, lat: number, lng: number) => void;
+  currentUserId: string | null;
+  currentUsername: string | null;
+  regions: Region[];
 }
 
 const statusLabels: Record<string, { label: string; color: string; bgColor: string; dotColor: string; icon: React.ReactNode }> = {
@@ -108,11 +113,28 @@ const formatTime = (isoString: string) => {
   return new Date(isoString).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 };
 
-const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember }) => {
+const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUserId, currentUsername, regions }) => {
   const [teamMembers, setTeamMembers] = useState<TeamMemberStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  const [memberCurrentTask, setMemberCurrentTask] = useState<Record<string, Task | null>>({});
+
+  const [isTaskDetailsOpen, setIsTaskDetailsOpen] = useState(false);
+  const [taskDetailsMember, setTaskDetailsMember] = useState<TeamMemberStatus | null>(null);
+  const [taskDetailsTask, setTaskDetailsTask] = useState<Task | null>(null);
+
+  // Task assignment modal state
+  const [isAssignTaskModalOpen, setIsAssignTaskModalOpen] = useState(false);
+  const [taskMember, setTaskMember] = useState<TeamMemberStatus | null>(null);
+  const [taskRegionId, setTaskRegionId] = useState<number>(0);
+  const [taskTitle, setTaskTitle] = useState<string>('');
+  const [taskDescription, setTaskDescription] = useState<string>('');
+  const [taskSearch, setTaskSearch] = useState<string>('');
+  const [selectedTaskLocationIds, setSelectedTaskLocationIds] = useState<string[]>([]);
+  const [assigningTask, setAssigningTask] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
 
   // Fetch team status
   const fetchTeamStatus = async () => {
@@ -148,6 +170,67 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember }) => {
     }
   };
 
+  const fetchCurrentTasksForMembers = async (members: TeamMemberStatus[]) => {
+    try {
+      const userIds = (members || []).map(m => m.user_id).filter(Boolean);
+      if (userIds.length === 0) {
+        setMemberCurrentTask({});
+        return;
+      }
+
+      const { data, error: fetchError } = await supabase
+        .from('tasks')
+        .select('*')
+        .in('assigned_to_user_id', userIds)
+        .in('status', ['assigned', 'in_progress'])
+        .order('created_at', { ascending: false })
+        .limit(500);
+
+      if (fetchError) {
+        console.warn('fetchCurrentTasksForMembers error', fetchError);
+        return;
+      }
+
+      const byUser: Record<string, Task | null> = {};
+      for (const uid of userIds) byUser[uid] = null;
+
+      const rows: Task[] = (data || []).map((r: any) => ({
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        createdAt: r.created_at,
+        createdByUserId: r.created_by_user_id,
+        createdByUsername: r.created_by_username,
+        assignedToUserId: r.assigned_to_user_id,
+        assignedToUsername: r.assigned_to_username,
+        regionId: r.region_id,
+        regionName: r.region_name,
+        routeLocationIds: Array.isArray(r.route_location_ids) ? r.route_location_ids : [],
+        status: r.status,
+        startedAt: r.started_at,
+        completedAt: r.completed_at,
+        cancelledAt: r.cancelled_at
+      }));
+
+      // Prefer in_progress; otherwise newest assigned
+      for (const t of rows) {
+        const uid = t.assignedToUserId;
+        const existing = byUser[uid];
+        if (!existing) {
+          byUser[uid] = t;
+          continue;
+        }
+        if (existing.status !== 'in_progress' && t.status === 'in_progress') {
+          byUser[uid] = t;
+        }
+      }
+
+      setMemberCurrentTask(byUser);
+    } catch (e) {
+      console.warn('fetchCurrentTasksForMembers exception', e);
+    }
+  };
+
   // Initial fetch and real-time subscription
   useEffect(() => {
     if (!isOpen) return;
@@ -170,10 +253,34 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember }) => {
       )
       .subscribe();
 
+    const tasksChannel = supabase
+      .channel('tasks_changes_team_panel')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tasks'
+        },
+        () => {
+          // refresh current tasks snapshot for visible members
+          fetchCurrentTasksForMembers(teamMembers);
+        }
+      )
+      .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
+      supabase.removeChannel(tasksChannel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetchCurrentTasksForMembers(teamMembers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, teamMembers]);
 
   // Auto-refresh every 30 seconds
   useEffect(() => {
@@ -204,6 +311,123 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember }) => {
 
   if (!isOpen) return null;
 
+  const selectedRegion = regions.find(r => r.id === taskRegionId);
+  const selectedRegionLocations = selectedRegion?.locations ?? [];
+  const sortedRegionLocations = selectedRegionLocations
+    .slice()
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'tr', { sensitivity: 'base', numeric: true }));
+
+  const filteredRegionLocations = sortedRegionLocations.filter((l) => {
+    const q = taskSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      String(l.name || '').toLowerCase().includes(q) ||
+      String(l.center || '').toLowerCase().includes(q) ||
+      String(l.id || '').toLowerCase().includes(q)
+    );
+  });
+
+  const isAllSelectedInRegion = selectedRegionLocations.length > 0 && selectedTaskLocationIds.length === selectedRegionLocations.length;
+
+  const openAssignTaskModal = (member: TeamMemberStatus) => {
+    if (!currentUserId) return;
+    setAssignError(null);
+    setTaskMember(member);
+    const defaultRegionId = regions?.[0]?.id ?? 0;
+    setTaskRegionId(defaultRegionId);
+    const defaultRegionName = regions?.find(r => r.id === defaultRegionId)?.name ?? '';
+    setTaskTitle(defaultRegionName ? `${defaultRegionName} Görevi` : 'Görev');
+    setTaskDescription('');
+    setTaskSearch('');
+    const defaultLocs = regions?.find(r => r.id === defaultRegionId)?.locations ?? [];
+    setSelectedTaskLocationIds(defaultLocs.map(l => String(l.id)));
+    setIsAssignTaskModalOpen(true);
+  };
+
+  const closeAssignTaskModal = () => {
+    setIsAssignTaskModalOpen(false);
+    setTaskMember(null);
+    setAssignError(null);
+    setAssigningTask(false);
+  };
+
+  const handleAssignTask = async () => {
+    if (!currentUserId || !taskMember) return;
+    setAssignError(null);
+
+    if (!taskRegionId || taskRegionId === 0) {
+      setAssignError('Bölge seçiniz');
+      return;
+    }
+
+    const region = selectedRegion;
+    const regionLocations = selectedRegionLocations;
+    if (!region || regionLocations.length === 0) {
+      setAssignError('Seçilen bölgede lokasyon bulunamadı');
+      return;
+    }
+
+    const selectedSet = new Set(selectedTaskLocationIds.map(String));
+    const selectedLocations = regionLocations.filter(l => selectedSet.has(String(l.id)));
+    if (selectedLocations.length === 0) {
+      setAssignError('En az 1 lokasyon seçmelisiniz');
+      return;
+    }
+
+    const routeLocationIds = selectedLocations
+      .slice()
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'tr', { sensitivity: 'base', numeric: true }))
+      .map(l => l.id);
+
+    if (routeLocationIds.length === 0) {
+      setAssignError('Görev rotası boş olamaz');
+      return;
+    }
+
+    setAssigningTask(true);
+    try {
+      const result = await createTask({
+        title: taskTitle?.trim() || `${region.name} Görevi`,
+        description: taskDescription?.trim() || null,
+        createdByUserId: currentUserId,
+        createdByUsername: currentUsername ?? null,
+        assignedToUserId: taskMember.user_id,
+        assignedToUsername: taskMember.username,
+        regionId: region.id,
+        regionName: region.name,
+        routeLocationIds
+      });
+
+      if (!result.success) {
+        setAssignError(result.error || 'Görev atanamadı');
+        return;
+      }
+
+      // Refresh task badges immediately
+      fetchCurrentTasksForMembers(teamMembers);
+      closeAssignTaskModal();
+    } catch (e) {
+      console.warn('handleAssignTask failed', e);
+      setAssignError('Görev atanamadı');
+    } finally {
+      setAssigningTask(false);
+    }
+  };
+
+  const openTaskDetails = (member: TeamMemberStatus) => {
+    const task = memberCurrentTask[member.user_id] ?? null;
+    if (!task) return;
+    setTaskDetailsMember(member);
+    setTaskDetailsTask(task);
+    setIsTaskDetailsOpen(true);
+  };
+
+  const closeTaskDetails = () => {
+    setIsTaskDetailsOpen(false);
+    setTaskDetailsMember(null);
+    setTaskDetailsTask(null);
+  };
+
   const activeMembers = teamMembers.filter(m => m.status !== 'idle');
   const idleMembers = teamMembers.filter(m => m.status === 'idle');
   const totalTodayCompleted = teamMembers.reduce((sum, m) => sum + (m.today_completed_count || 0), 0);
@@ -212,7 +436,7 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember }) => {
   const totalInRoute = teamMembers.reduce((sum, m) => sum + (m.total_route_count || 0), 0);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-2 sm:p-4">
+    <div className="fixed inset-0 z-[1200] bg-black/40 flex items-center justify-center p-2 sm:p-4">
       <div 
         ref={panelRef}
         className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[95vh] flex flex-col overflow-hidden"
@@ -357,6 +581,9 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember }) => {
                         key={member.id} 
                         member={member} 
                         onFocus={onFocusMember}
+                        currentTask={memberCurrentTask[member.user_id] ?? null}
+                        onAssignTask={currentUserId ? () => openAssignTaskModal(member) : undefined}
+                        onOpenTaskDetails={() => openTaskDetails(member)}
                       />
                     ))}
                   </div>
@@ -378,6 +605,9 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember }) => {
                         key={member.id} 
                         member={member} 
                         onFocus={onFocusMember}
+                        currentTask={memberCurrentTask[member.user_id] ?? null}
+                        onAssignTask={currentUserId ? () => openAssignTaskModal(member) : undefined}
+                        onOpenTaskDetails={() => openTaskDetails(member)}
                       />
                     ))}
                   </div>
@@ -386,6 +616,223 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember }) => {
             </div>
           )}
         </div>
+
+        {/* Assign Task Modal */}
+        {isAssignTaskModalOpen && taskMember && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1210] p-4">
+            <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-lg font-bold">Görev Ata</h3>
+                  <p className="text-sm text-gray-600">Kişi: <span className="font-semibold">{taskMember.username}</span></p>
+                </div>
+                <button
+                  onClick={closeAssignTaskModal}
+                  className="p-2 rounded-lg hover:bg-gray-100"
+                  title="Kapat"
+                >
+                  <X className="w-5 h-5 text-gray-600" />
+                </button>
+              </div>
+
+              {assignError ? (
+                <div className="mb-3 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-2">
+                  {assignError}
+                </div>
+              ) : null}
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Bölge</label>
+                  <select
+                    value={taskRegionId}
+                    onChange={(e) => {
+                      const id = Number(e.target.value);
+                      setTaskRegionId(id);
+                      const name = regions.find(r => r.id === id)?.name ?? '';
+                      if (name) setTaskTitle(`${name} Görevi`);
+                      setTaskSearch('');
+                      const locs = regions.find(r => r.id === id)?.locations ?? [];
+                      setSelectedTaskLocationIds(locs.map(l => String(l.id)));
+                    }}
+                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value={0}>Bölge seçiniz</option>
+                    {regions.map(r => (
+                      <option key={r.id} value={r.id}>{r.id}. Bölge - {r.name}</option>
+                    ))}
+                  </select>
+                  {taskRegionId !== 0 ? (
+                    <div className="mt-1 text-xs text-gray-500">
+                      Lokasyon sayısı: {(regions.find(r => r.id === taskRegionId)?.locations?.length ?? 0)}
+                    </div>
+                  ) : null}
+                </div>
+
+                {taskRegionId !== 0 && (
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <label className="block text-sm font-medium text-gray-700">Lokasyonlar</label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!selectedRegionLocations.length) return;
+                          if (isAllSelectedInRegion) setSelectedTaskLocationIds([]);
+                          else setSelectedTaskLocationIds(selectedRegionLocations.map(l => String(l.id)));
+                        }}
+                        className="text-sm px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700"
+                      >
+                        {isAllSelectedInRegion ? 'Tümünü Kaldır' : 'Tümünü Seç'}
+                      </button>
+                    </div>
+
+                    <input
+                      type="text"
+                      value={taskSearch}
+                      onChange={(e) => setTaskSearch(e.target.value)}
+                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 mb-2"
+                      placeholder="Ara (isim/merkez/id)"
+                    />
+
+                    <div className="border border-gray-200 rounded-lg max-h-56 overflow-auto">
+                      {filteredRegionLocations.length === 0 ? (
+                        <div className="p-3 text-sm text-gray-500">Lokasyon bulunamadı</div>
+                      ) : (
+                        <div className="divide-y divide-gray-100">
+                          {filteredRegionLocations.map((loc) => {
+                            const id = String(loc.id);
+                            const checked = selectedTaskLocationIds.includes(id);
+                            return (
+                              <label key={id} className="flex items-start gap-3 p-3 hover:bg-gray-50 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    const next = e.target.checked;
+                                    setSelectedTaskLocationIds((prev) => {
+                                      const set = new Set(prev);
+                                      if (next) set.add(id);
+                                      else set.delete(id);
+                                      return Array.from(set);
+                                    });
+                                  }}
+                                  className="mt-1"
+                                />
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium text-gray-900 truncate">{loc.name}</div>
+                                  <div className="text-xs text-gray-500 truncate">{loc.center}</div>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-2 text-xs text-gray-500">Seçili: {selectedTaskLocationIds.length}</div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Başlık</label>
+                  <input
+                    type="text"
+                    value={taskTitle}
+                    onChange={(e) => setTaskTitle(e.target.value)}
+                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    placeholder="Görev başlığı"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Açıklama (opsiyonel)</label>
+                  <textarea
+                    value={taskDescription}
+                    onChange={(e) => setTaskDescription(e.target.value)}
+                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[90px]"
+                    placeholder="Not / açıklama"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-6 flex gap-2 justify-end">
+                <button
+                  onClick={closeAssignTaskModal}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                  disabled={assigningTask}
+                >
+                  Vazgeç
+                </button>
+                <button
+                  onClick={handleAssignTask}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60"
+                  disabled={assigningTask}
+                >
+                  {assigningTask ? 'Atanıyor…' : 'Görev Ata'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Task Details Modal */}
+        {isTaskDetailsOpen && taskDetailsMember && taskDetailsTask && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1210] p-4">
+            <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-lg font-bold">Mevcut Görev</h3>
+                  <p className="text-sm text-gray-600">Kişi: <span className="font-semibold">{taskDetailsMember.username}</span></p>
+                </div>
+                <button
+                  onClick={closeTaskDetails}
+                  className="p-2 rounded-lg hover:bg-gray-100"
+                  title="Kapat"
+                >
+                  <X className="w-5 h-5 text-gray-600" />
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <div className="text-sm text-gray-500">Başlık</div>
+                  <div className="font-semibold text-gray-900">{taskDetailsTask.title}</div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <div className="text-xs text-gray-500">Durum</div>
+                    <div className="text-sm font-semibold text-gray-900">{taskDetailsTask.status === 'in_progress' ? 'Devam Ediyor' : 'Atandı'}</div>
+                  </div>
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <div className="text-xs text-gray-500">Lokasyon</div>
+                    <div className="text-sm font-semibold text-gray-900">{Array.isArray(taskDetailsTask.routeLocationIds) ? taskDetailsTask.routeLocationIds.length : 0}</div>
+                  </div>
+                </div>
+                {taskDetailsTask.regionName ? (
+                  <div>
+                    <div className="text-sm text-gray-500">Bölge</div>
+                    <div className="text-sm font-semibold text-gray-900">{taskDetailsTask.regionName}</div>
+                  </div>
+                ) : null}
+                {taskDetailsTask.description ? (
+                  <div>
+                    <div className="text-sm text-gray-500">Açıklama</div>
+                    <div className="text-sm text-gray-800 whitespace-pre-line">{taskDetailsTask.description}</div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={closeTaskDetails}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -393,10 +840,13 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember }) => {
 
 interface TeamMemberCardProps {
   member: TeamMemberStatus;
-  onFocus?: (lat: number, lng: number) => void;
+  onFocus?: (memberId: string, username: string, lat: number, lng: number) => void;
+  currentTask?: Task | null;
+  onAssignTask?: () => void;
+  onOpenTaskDetails?: () => void;
 }
 
-const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ member, onFocus }) => {
+const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ member, onFocus, currentTask, onAssignTask, onOpenTaskDetails }) => {
   const [showCompletedList, setShowCompletedList] = useState(false);
   const statusInfo = statusLabels[member.status] || statusLabels.idle;
   const isActive = member.status !== 'idle';
@@ -404,7 +854,7 @@ const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ member, onFocus }) => {
   
   const handleFocusClick = () => {
     if (onFocus && member.current_lat && member.current_lng) {
-      onFocus(member.current_lat, member.current_lng);
+      onFocus(member.user_id, member.username, member.current_lat, member.current_lng);
     }
   };
 
@@ -545,6 +995,24 @@ const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ member, onFocus }) => {
         )}
       </div>
 
+      {currentTask && onOpenTaskDetails ? (
+        <button
+          onClick={onOpenTaskDetails}
+          className="w-full mb-1 px-3 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-sm font-semibold hover:bg-emerald-100 flex items-center justify-center gap-2"
+        >
+          <ListChecks className="w-4 h-4" />
+          Mevcut Görev
+        </button>
+      ) : onAssignTask ? (
+        <button
+          onClick={onAssignTask}
+          className="w-full mb-1 px-3 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-semibold hover:bg-indigo-100 flex items-center justify-center gap-2"
+        >
+          <ListChecks className="w-4 h-4" />
+          Görev Ata
+        </button>
+      ) : null}
+
       {/* Completed Locations Accordion */}
       {completedLocations.length > 0 && (
         <div className="border-t border-gray-100">
@@ -588,14 +1056,14 @@ const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ member, onFocus }) => {
       )}
 
       {/* Focus Button */}
-      {member.current_lat && member.current_lng && onFocus && (
+      {(member.status === 'yolda' || member.status === 'adreste') && member.current_lat && member.current_lng && onFocus && (
         <div className="px-4 pb-4">
           <button
             onClick={handleFocusClick}
             className="w-full py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors flex items-center justify-center gap-2 border border-indigo-200"
           >
             <Navigation className="w-4 h-4" />
-            Haritada Göster
+            Haritada takip et
           </button>
         </div>
       )}

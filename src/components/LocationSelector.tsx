@@ -57,17 +57,17 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   }, [searchTermProp]);
 
   const getStatus = (details: Location['details']) => {
-    // Precedence: Aktif (configured + active) -> Montajlı (isInstalled) -> Konfigüre -> Eksik
-    if (details.isActive && details.isConfigured) {
-      return { label: 'Aktif', colorClass: 'text-green-600', dotClass: 'bg-green-500' };
+    // New scheme (requested): Accepted > Installed > Started(Ring) > Untouched
+    if (details.isAccepted) {
+      return { label: 'Kabul Edildi', colorClass: 'text-green-600', dotClass: 'bg-green-500' };
     }
     if (details.isInstalled) {
-      return { label: 'Montajlı', colorClass: 'text-indigo-600', dotClass: 'bg-indigo-500' };
+      return { label: 'Kurulum Tamam', colorClass: 'text-blue-600', dotClass: 'bg-blue-500' };
     }
     if (details.isConfigured) {
-      return { label: 'Konfigüre', colorClass: 'text-yellow-500', dotClass: 'bg-yellow-500' };
+      return { label: 'Başlandı', colorClass: 'text-amber-600', dotClass: 'bg-amber-500' };
     }
-    return { label: 'Eksik', colorClass: 'text-red-500', dotClass: 'bg-red-500' };
+    return { label: 'Hiç Girilmedi', colorClass: 'text-amber-900', dotClass: 'bg-amber-800' };
   };
 
   const matchesStatus = (location: Location) => {
