@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, MapPin, Shield, Settings, Zap, CreditCard, Radio, Database, Cpu, Server, Activity, Monitor } from 'lucide-react';
 import { Location } from '../data/regions';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface LocationEditModalProps {
   location: Location;
@@ -25,20 +26,12 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
 }) => {
   const [editedLocation, setEditedLocation] = useState<Location>(location);
 
+  useBodyScrollLock(isOpen);
+
   // Location prop'u değiştiğinde state'i güncelle
   useEffect(() => {
     setEditedLocation(location);
   }, [location]);
-
-  // Prevent body scroll when modal is open
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    }
-    return () => {
-      document.body.style.overflow = 'unset';
-    };
-  }, [isOpen]);
 
   if (!isOpen) return null;
   // Editor users should only be able to edit the `note` field.
@@ -143,32 +136,27 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
 
   return (
     <div 
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
-      onWheel={(e) => e.stopPropagation()}
+      className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm"
     >
-      {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-
-      {/* Modal */}
-      <div className="relative z-10 w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+      <div className="bg-white w-full h-full shadow-2xl overflow-hidden flex flex-col overscroll-contain">
         
         {/* Header */}
-        <div className="relative px-6 py-5 bg-gradient-to-r from-blue-500 to-blue-600 flex-shrink-0">
+        <div className="relative px-6 py-5 bg-slate-900 text-white border-b border-slate-800 flex-shrink-0">
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
                 <MapPin className="w-6 h-6 text-white" />
               </div>
               <div>
                 <h2 className="text-xl font-bold text-white">
                   {isCreate ? 'Yeni Lokasyon Oluştur' : 'Lokasyon Düzenle'}
                 </h2>
-                <p className="text-blue-100 text-sm mt-1">{editedLocation.name || 'Lokasyon bilgilerini girin'}</p>
+                <p className="text-white/70 text-sm mt-1">{editedLocation.name || 'Lokasyon bilgilerini girin'}</p>
               </div>
             </div>
             <button 
               onClick={onClose} 
-              className="p-2 rounded-lg hover:bg-white/20 transition-colors"
+              className="p-2 rounded-lg hover:bg-white/10 transition-colors"
             >
               <X className="w-5 h-5 text-white" />
             </button>
@@ -183,8 +171,7 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
 
         {/* Content */}
         <div 
-          className="flex-1 overflow-y-auto p-6 space-y-6"
-          onWheel={(e) => e.stopPropagation()}
+          className="flex-1 overflow-y-auto p-6 space-y-6 overscroll-contain"
         >
           {/* Temel Bilgiler */}
           <div>

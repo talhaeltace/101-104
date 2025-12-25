@@ -755,8 +755,23 @@ function App() {
             username: String(r.username ?? ''),
             lat: Number(r.current_lat),
             lng: Number(r.current_lng)
-          }));
-        setTeamLiveLocations(mapped);
+          }))
+          // Stable ordering to avoid re-render churn from row ordering changes
+          .sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)));
+
+        setTeamLiveLocations(prev => {
+          if (!prev || prev.length !== mapped.length) return mapped;
+          for (let i = 0; i < mapped.length; i++) {
+            const p = prev[i];
+            const n = mapped[i];
+            if (!p || !n) return mapped;
+            if (p.id !== n.id) return mapped;
+            if (p.lat !== n.lat || p.lng !== n.lng) return mapped;
+            // username changes are not critical for map stability; still update if changed
+            if (p.username !== n.username) return mapped;
+          }
+          return prev;
+        });
 
         if (followMember?.id) {
           const found = rows.find((r: any) => String(r.user_id) === followMember.id);
@@ -1040,7 +1055,8 @@ function App() {
       currentUser.username,
       currentTargetLocation.id,
       currentTargetLocation.name,
-      arrivalTime
+      arrivalTime,
+      travelMinutes
     );
 
     // Refresh activities
@@ -2246,6 +2262,7 @@ function App() {
                 onClose={() => setIsTeamPanelOpen(false)}
                 currentUserId={currentUser?.id ?? null}
                 currentUsername={currentUser?.username ?? null}
+                isAdmin={userRole === 'admin'}
                 regions={locations}
                 onFocusMember={canViewLiveMap ? ((memberId: string, username: string, lat: number, lng: number) => {
                   setFollowMember({ id: memberId, username, lat, lng });

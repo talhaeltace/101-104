@@ -1,5 +1,6 @@
 import React from 'react';
 import { X } from 'lucide-react';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface NoteModalProps {
   isOpen: boolean;
@@ -9,19 +10,21 @@ interface NoteModalProps {
 }
 
 const NoteModal: React.FC<NoteModalProps> = ({ isOpen, title = 'Not', note, onClose }) => {
+  useBodyScrollLock(isOpen);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-xl w-full max-h-[80vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-4 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded hover:bg-gray-100">
-            <X className="w-5 h-5 text-gray-600" />
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999]">
+      <div className="bg-white w-full h-full flex flex-col overflow-hidden overscroll-contain">
+        <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-900 text-white">
+          <h3 className="text-lg font-semibold">{title}</h3>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-white/10">
+            <X className="w-5 h-5 text-white/80" />
           </button>
         </div>
 
-        <div className="p-4">
+        <div className="flex-1 overflow-y-auto p-4 overscroll-contain">
           {note && note.length > 0 ? (
             <div className="whitespace-pre-wrap text-sm text-gray-800">{note}</div>
           ) : (

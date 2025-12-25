@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { regions, Region, Location } from '../data/regions';
 
@@ -7,93 +7,8 @@ export const useLocations = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Veritabanından verileri yükle
-  const loadLocations = async () => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('locations')
-        .select('*')
-        .order('region_id', { ascending: true });
-
-      if (error) {
-        console.error('Veri yükleme hatası:', error);
-        // Hata durumunda varsayılan verileri kullan
-        setLocations(regions);
-        return;
-      }
-
-      if (data && data.length > 0) {
-        // Veritabanından gelen verileri region formatına dönüştür
-        const groupedData = data.reduce((acc: any, item: any) => {
-          const regionId = item.region_id;
-          if (!acc[regionId]) {
-            acc[regionId] = {
-              id: regionId,
-              name: `${regionId}. Bölge Müdürlüğü`,
-              locations: []
-            };
-          }
-          acc[regionId].locations.push({
-            id: item.id,
-            name: item.name,
-            center: item.center,
-            coordinates: [item.latitude, item.longitude],
-            address: item.address || null,
-            note: item.note || null,
-            brand: item.brand,
-            model: item.model,
-            details: {
-              hasGPS: item.has_gps,
-              hasRTU: item.has_rtu,
-              hasPanos: item.has_panos,
-                isAccepted: item.is_accepted ?? false,
-                isInstalled: item.is_installed ?? false,
-                hasCardAccess: item.has_card_access ?? false,
-                isInstalledCardAccess: item.is_installed_card_access ?? false,
-                isActiveCardAccess: item.is_active_card_access ?? false,
-              isActive: item.is_active,
-              isConfigured: item.is_configured,
-              equipment: {
-                securityFirewall: item.security_firewall || 0,
-                networkSwitch: item.network_switch || 0,
-                rtuCount: item.rtu_count || 0,
-                gpsCardAntenna: item.gps_card_antenna || 0,
-                rtuPanel: item.rtu_panel || 0,
-                btpPanel: item.btp_panel || 0,
-                energyAnalyzer: item.energy_analyzer || 0,
-                ykgcCount: item.ykgc_count || 0,
-                teiasRtuInstallation: item.teias_rtu_installation || 0,
-                indoorDomeCamera: item.indoor_dome_camera || 0,
-                networkVideoManagement: item.network_video_management || 0,
-                smartControlUnit: item.smart_control_unit || 0,
-                cardReader: item.card_reader || 0,
-                networkRecordingUnit: item.network_recording_unit || 0,
-                accessControlSystem: item.access_control_system || 0,
-                transformerCenterType: item.transformer_center_type || null
-              }
-            }
-          });
-          return acc;
-        }, {});
-
-        const regionsArray = Object.values(groupedData) as Region[];
-        setLocations(regionsArray);
-      } else {
-        // Veri yoksa varsayılan verileri veritabanına kaydet
-        await initializeDatabase();
-      }
-    } catch (err) {
-      console.error('Beklenmeyen hata:', err);
-      setError('Veriler yüklenirken hata oluştu');
-      setLocations(regions);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Varsayılan verileri veritabanına kaydet
-  const initializeDatabase = async () => {
+  const initializeDatabase = useCallback(async () => {
     try {
       const locationsToInsert = regions.flatMap(region =>
         region.locations.map(location => ({
@@ -131,23 +46,103 @@ export const useLocations = () => {
           card_reader: location.details.equipment.cardReader,
           network_recording_unit: location.details.equipment.networkRecordingUnit,
           access_control_system: location.details.equipment.accessControlSystem,
-          transformer_center_type: location.details.equipment.transformerCenterType || null
+          transformer_center_type: location.details.equipment.transformerCenterType,
+          is_accepted: location.details.isAccepted ?? false,
         }))
       );
 
-      const { error } = await supabase
+      const { error } = await supabase.from('locations').insert(locationsToInsert);
+      if (error) {
+        console.error('Veritabanı başlatma hatası:', error);
+      }
+    } catch (err) {
+      console.error('Beklenmeyen veritabanı başlatma hatası:', err);
+    }
+  }, []);
+
+  // Veritabanından verileri yükle
+  const loadLocations = useCallback(async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
         .from('locations')
-        .insert(locationsToInsert);
+        .select('*')
+        .order('region_id', { ascending: true });
 
       if (error) {
-        console.error('Veri kaydetme hatası:', error);
+        console.error('Veri yükleme hatası:', error);
+        setLocations(regions);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const groupedData = data.reduce((acc: any, item: any) => {
+          const regionId = item.region_id;
+          if (!acc[regionId]) {
+            acc[regionId] = {
+              id: regionId,
+              name: `${regionId}. Bölge Müdürlüğü`,
+              locations: []
+            };
+          }
+
+          acc[regionId].locations.push({
+            id: item.id,
+            name: item.name,
+            center: item.center,
+            coordinates: [item.latitude, item.longitude],
+            address: item.address || null,
+            note: item.note || null,
+            brand: item.brand,
+            model: item.model,
+            details: {
+              hasGPS: item.has_gps,
+              hasRTU: item.has_rtu,
+              hasPanos: item.has_panos,
+              isAccepted: item.is_accepted ?? false,
+              isInstalled: item.is_installed ?? false,
+              hasCardAccess: item.has_card_access ?? false,
+              isInstalledCardAccess: item.is_installed_card_access ?? false,
+              isActiveCardAccess: item.is_active_card_access ?? false,
+              isActive: item.is_active,
+              isConfigured: item.is_configured,
+              equipment: {
+                securityFirewall: item.security_firewall || 0,
+                networkSwitch: item.network_switch || 0,
+                rtuCount: item.rtu_count || 0,
+                gpsCardAntenna: item.gps_card_antenna || 0,
+                rtuPanel: item.rtu_panel || 0,
+                btpPanel: item.btp_panel || 0,
+                energyAnalyzer: item.energy_analyzer || 0,
+                ykgcCount: item.ykgc_count || 0,
+                teiasRtuInstallation: item.teias_rtu_installation || 0,
+                indoorDomeCamera: item.indoor_dome_camera || 0,
+                networkVideoManagement: item.network_video_management || 0,
+                smartControlUnit: item.smart_control_unit || 0,
+                cardReader: item.card_reader || 0,
+                networkRecordingUnit: item.network_recording_unit || 0,
+                accessControlSystem: item.access_control_system || 0,
+                transformerCenterType: item.transformer_center_type || null
+              }
+            }
+          });
+          return acc;
+        }, {});
+
+        const regionsArray = Object.values(groupedData) as Region[];
+        setLocations(regionsArray);
       } else {
+        await initializeDatabase();
         setLocations(regions);
       }
     } catch (err) {
-      console.error('Veritabanı başlatma hatası:', err);
+      console.error('Beklenmeyen hata:', err);
+      setError('Veriler yüklenirken hata oluştu');
+      setLocations(regions);
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [initializeDatabase]);
 
   // Lokasyon güncelle
   const updateLocation = async (updatedLocation: Location) => {
@@ -361,7 +356,7 @@ export const useLocations = () => {
 
   useEffect(() => {
     loadLocations();
-  }, []);
+  }, [loadLocations]);
 
   return {
     locations,

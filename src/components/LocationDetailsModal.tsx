@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { MapPin, Zap, Database, Cpu, FileText, Navigation, X, Settings, Radio, Shield, Monitor, CreditCard, Server, Activity } from 'lucide-react';
 import NoteModal from '../components/NoteModal';
 import { Location } from '../data/regions';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface Props {
   location: Location;
@@ -17,6 +18,8 @@ interface Props {
 const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEdit, isAdmin, isEditor, isViewer, canEdit }) => {
   const [noteOpen, setNoteOpen] = useState(false);
 
+  useBodyScrollLock(isOpen);
+
   const canEditLocation = (typeof canEdit === 'boolean' ? canEdit : !!(isAdmin || isEditor)) && !isViewer;
   
   const mapsUrl =
@@ -26,16 +29,6 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
       ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location.address)}`
       : '';
   const canOpenMaps = Boolean(mapsUrl);
-
-  // Prevent body scroll when modal is open
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    }
-    return () => {
-      document.body.style.overflow = 'unset';
-    };
-  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -75,46 +68,34 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
   ];
 
   return (
-    <div
-      className="fixed inset-0 z-[1200] flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
-      onWheel={(e) => e.stopPropagation()}
-    >
-      {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-
-      {/* Modal */}
-      <div 
-        className="relative z-10 w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
-        onWheel={(e) => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-[1200] bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <div className="bg-white w-full h-full overflow-hidden flex flex-col overscroll-contain">
         
         {/* Header */}
-        <div className={`relative px-6 py-5 ${status.bgColor} border-b ${status.borderColor}`}>
+        <div className="relative px-6 py-5 border-b border-slate-800 bg-slate-900 text-white flex-shrink-0">
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-4">
               {/* Status indicator */}
-              <div className={`w-12 h-12 rounded-xl ${status.color} flex items-center justify-center shadow-lg`}>
+              <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
                 <MapPin className="w-6 h-6 text-white" />
               </div>
 
               <div className="flex flex-col">
                 <div className="flex items-center gap-3 flex-wrap">
-                  <h2 className="text-2xl font-bold text-gray-900">{location.name}</h2>
+                  <h2 className="text-2xl font-bold">{location.name}</h2>
                   <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${status.bgColor} ${status.textColor} border ${status.borderColor}`}>
                     {status.label}
                   </span>
                 </div>
-                <span className="text-sm text-gray-500">{location.center}</span>
+                <span className="text-sm text-white/70">{location.center}</span>
               </div>
             </div>
             
             <button 
               onClick={onClose} 
-              className="p-2 rounded-lg hover:bg-white/50 transition-colors"
+              className="p-2 rounded-lg hover:bg-white/10 transition-colors"
             >
-              <X className="w-5 h-5 text-gray-500" />
+              <X className="w-5 h-5 text-white/80" />
             </button>
           </div>
 
@@ -122,7 +103,7 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
           {location.note && location.note.length > 0 && (
             <button 
               onClick={() => setNoteOpen(true)} 
-              className="absolute bottom-3 right-6 flex items-center gap-2 px-3 py-1.5 bg-white/80 hover:bg-white rounded-lg text-sm font-medium text-blue-600 transition-colors shadow-sm"
+              className="absolute bottom-3 right-6 flex items-center gap-2 px-3 py-1.5 bg-white/10 hover:bg-white/15 rounded-lg text-sm font-medium text-white transition-colors"
             >
               <FileText className="w-4 h-4" />
               Notu Görüntüle
@@ -131,7 +112,7 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 overscroll-contain">
           
           {/* Info Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

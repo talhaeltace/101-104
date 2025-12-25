@@ -3,6 +3,7 @@ import { ClipboardList, RefreshCw, X } from 'lucide-react';
 import type { Task } from '../lib/tasks';
 import { listTasksForUser } from '../lib/tasks';
 import { supabase } from '../lib/supabase';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface Props {
   isOpen: boolean;
@@ -23,6 +24,8 @@ const TasksPanel: React.FC<Props> = ({ isOpen, onClose, userId, onStartTask }) =
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  useBodyScrollLock(isOpen);
 
   const load = async () => {
     try {
@@ -88,12 +91,12 @@ const TasksPanel: React.FC<Props> = ({ isOpen, onClose, userId, onStartTask }) =
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[1200] bg-black/40 flex items-center justify-center p-2 sm:p-4">
+    <div className="fixed inset-0 z-[1200] bg-black/60 backdrop-blur-sm">
       <div
         ref={panelRef}
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[95vh] flex flex-col overflow-hidden"
+        className="bg-white w-full h-full flex flex-col overflow-hidden overscroll-contain"
       >
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-100 bg-gradient-to-r from-indigo-600 to-purple-600 text-white">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-800 bg-slate-900 text-white">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-xl">
               <ClipboardList className="w-5 h-5" />
@@ -122,7 +125,7 @@ const TasksPanel: React.FC<Props> = ({ isOpen, onClose, userId, onStartTask }) =
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6 overscroll-contain">
           {error ? (
             <div className="text-center py-10 text-red-500">{error}</div>
           ) : loading && tasks.length === 0 ? (

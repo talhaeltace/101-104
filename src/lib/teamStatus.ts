@@ -240,7 +240,9 @@ export async function resetDailyTeamStats(userId: string): Promise<boolean> {
  * Calculate minutes between two dates
  */
 export function calculateMinutesBetween(start: Date, end: Date): number {
-  return Math.round((end.getTime() - start.getTime()) / 60000);
+  // For travel time, rounding down to 0 is confusing in UI; prefer ceiling.
+  // (Only used in App.tsx for travel legs.)
+  return Math.max(0, Math.ceil((end.getTime() - start.getTime()) / 60000));
 }
 
 /**

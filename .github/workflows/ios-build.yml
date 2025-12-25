@@ -52,17 +52,11 @@ jobs:
     
     - name: Build iOS
       run: |
-        # Ensure CFBundleVersion (CURRENT_PROJECT_VERSION) is always higher than previous uploads.
-        # Timestamp format keeps it numeric and monotonically increasing.
-        BUILD_NUMBER="$(date +%Y%m%d%H%M)"
-        echo "Using iOS build number: $BUILD_NUMBER"
-
         xcodebuild -workspace ios/App/App.xcworkspace \
           -scheme App \
           -sdk iphoneos \
           -configuration Release \
           -archivePath $RUNNER_TEMP/App.xcarchive \
-          CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
           archive
         
         xcodebuild -exportArchive \

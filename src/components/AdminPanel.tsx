@@ -11,6 +11,7 @@ import {
 } from '../lib/userPermissions';
 import { listTasksCreatedByUser, updateTaskStatus, type Task } from '../lib/tasks';
 import { supabase } from '../lib/supabase';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface AdminPanelProps {
   currentUserId: string;
@@ -18,6 +19,8 @@ interface AdminPanelProps {
 }
 
 export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) {
+  useBodyScrollLock(true);
+
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedUser, setSelectedUser] = useState<AppUser | null>(null);
@@ -251,19 +254,19 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
   }, [successMessage]);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1200] p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[1200]">
+      <div className="bg-white w-full h-full overflow-hidden flex flex-col overscroll-contain">
         {/* Header */}
-        <div className="p-4 border-b flex items-center justify-between bg-gradient-to-r from-gray-50 to-gray-100">
-          <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-            <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900 text-white">
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <svg className="w-6 h-6 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
             Admin Paneli - Kullanıcı Yönetimi
           </h2>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-gray-200 rounded-full transition-colors"
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -290,7 +293,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-auto p-4">
+        <div className="flex-1 overflow-auto p-4 overscroll-contain">
           {loading ? (
             <div className="flex items-center justify-center h-64">
               <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent"></div>

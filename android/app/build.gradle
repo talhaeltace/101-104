@@ -3,12 +3,23 @@ apply plugin: 'com.android.application'
 android {
     namespace "com.nelit.project101104"
     compileSdk rootProject.ext.compileSdkVersion
+
+    def hasReleaseKeystore = false
+    try {
+        if (project.hasProperty('RELEASE_STORE_FILE')) {
+            def f = file(RELEASE_STORE_FILE)
+            hasReleaseKeystore = (f != null && f.exists())
+        }
+    } catch (ignored) {
+        hasReleaseKeystore = false
+    }
+
     defaultConfig {
         applicationId "com.nelit.project101104"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 12
-        versionName "2.1.1"
+        versionCode 13
+        versionName "2.1.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -20,11 +31,13 @@ android {
     signingConfigs {
         release {
             // Keystore bilgileri - gradle.properties veya environment variables'dan alınır
-            if (project.hasProperty('RELEASE_STORE_FILE')) {
+            if (hasReleaseKeystore) {
                 storeFile file(RELEASE_STORE_FILE)
                 storePassword RELEASE_STORE_PASSWORD
                 keyAlias RELEASE_KEY_ALIAS
                 keyPassword RELEASE_KEY_PASSWORD
+            } else {
+                logger.lifecycle("Release keystore not found; building unsigned release APK")
             }
         }
     }
@@ -34,7 +47,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            if (project.hasProperty('RELEASE_STORE_FILE')) {
+            if (hasReleaseKeystore) {
                 signingConfig signingConfigs.release
             }
         }

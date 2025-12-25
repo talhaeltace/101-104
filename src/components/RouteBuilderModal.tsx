@@ -1,3 +1,4 @@
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import React, { useMemo, useState, useEffect } from 'react';
 import { Location } from '../data/regions';
 import { obtainCurrentPosition } from '../lib/deviceGeolocation';
@@ -124,6 +125,7 @@ const RouteBuilderModal: React.FC<Props> = ({
   initialRegionFilter,
   initialStartMode
 }) => {
+    useBodyScrollLock(isOpen);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [startMode, setStartMode] = useState<'auto' | 'fixed' | 'current'>('auto');
   const [fixedStartId, setFixedStartId] = useState<string | null>(null);
@@ -715,21 +717,21 @@ const RouteBuilderModal: React.FC<Props> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[99999] flex items-center justify-center p-0 md:p-4 bg-black/60 backdrop-blur-sm">
-      <div className="bg-white w-full h-full md:h-[90vh] md:w-[95vw] md:max-w-7xl md:rounded-2xl shadow-2xl overflow-hidden flex flex-col relative">
+    <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm">
+      <div className="bg-white w-full h-full shadow-2xl overflow-hidden flex flex-col relative overscroll-contain">
         
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b bg-white shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900 text-white shrink-0">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-50 rounded-lg text-indigo-600 hidden sm:block">
+            <div className="p-2 bg-white/10 rounded-lg text-white hidden sm:block">
               <Navigation size={20} />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-gray-900">Rota Oluşturucu</h3>
-              <p className="text-xs text-gray-500 hidden sm:block">Lokasyonları seçin, rotanızı optimize edin ve yola çıkın.</p>
+              <h3 className="text-lg font-bold">Rota Oluşturucu</h3>
+              <p className="text-xs text-white/70 hidden sm:block">Lokasyonları seçin, rotanızı optimize edin ve yola çıkın.</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors">
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg text-white/80 transition-colors">
             <X size={20} />
           </button>
         </div>

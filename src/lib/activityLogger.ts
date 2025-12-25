@@ -46,14 +46,18 @@ export const logArrival = async (
   username: string,
   locationId: string,
   locationName: string,
-  arrivalTime: Date
+  arrivalTime: Date,
+  travelMinutes?: number
 ) => {
   return logActivity({
     username,
-    action: `${locationName} lokasyonuna vardı`,
+    action: travelMinutes != null
+      ? `${locationName} lokasyonuna vardı (${travelMinutes} dakika)`
+      : `${locationName} lokasyonuna vardı`,
     location_id: locationId,
     location_name: locationName,
     arrival_time: arrivalTime.toISOString(),
+    duration_minutes: travelMinutes,
     activity_type: 'arrival'
   });
 };

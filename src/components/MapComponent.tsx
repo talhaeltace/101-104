@@ -66,6 +66,12 @@ const MapComponent: React.FC<MapComponentProps> = ({
   const userMarkerRef = useRef<any>(null); // User location marker
   const followMarkerRef = useRef<any>(null);
   const teamMarkersRef = useRef<Map<string, any>>(new Map());
+  // Live map follow: center only once per followed member, then never auto-pan.
+  // Continuous pan on 2s updates causes "flash" / camera reset while trying to inspect.
+  const didCenterFollowForIdRef = useRef<string | null>(null);
+  const lastUserMapInteractAtRef = useRef<number>(0);
+  const lastAutoPanAtRef = useRef<number>(0);
+  const lastMarkerTouchAtRef = useRef<number>(0);
   const didInitialFitRef = useRef<boolean>(false);
   const didFitMarkersForRegionRef = useRef<number | null>(null);
   const [mapReady, setMapReady] = useState<boolean>(false);
@@ -117,6 +123,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
         try { followMarkerRef.current.remove(); } catch { /* ignore */ }
         followMarkerRef.current = null;
       }
+      didCenterFollowForIdRef.current = null;
       return;
     }
 
@@ -125,6 +132,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
     const pos: [number, number] = [followMemberLocation.lat, followMemberLocation.lng];
     const label = followMemberLocation.username || 'Ekip';
+
+    const followId = String(followMemberLocation.id);
 
     if (!followMarkerRef.current) {
       const icon = L.divIcon({
@@ -138,20 +147,44 @@ const MapComponent: React.FC<MapComponentProps> = ({
         iconAnchor: [14, 14]
       });
       followMarkerRef.current = L.marker(pos, { icon }).addTo(mapInstance.current);
+
+      // First time we show the followed member: center once so the user can find them,
+      // but don't keep re-centering every 2s.
+      try {
+        if (didCenterFollowForIdRef.current !== followId) {
+          didCenterFollowForIdRef.current = followId;
+          const map = mapInstance.current;
+          const z = typeof map.getZoom === 'function' ? map.getZoom() : 12;
+          map.setView(pos, z, { animate: true, duration: 0.6 });
+        }
+      } catch {
+        // ignore
+      }
     } else {
       followMarkerRef.current.setLatLng(pos);
     }
 
-    // Keep the followed marker in view without forcing a full re-center every refresh.
-    // This reduces tile reload/flicker when updates arrive frequently.
+    // Auto-follow behavior:
+    // - Never change zoom.
+    // - Only pan if the followed marker goes outside a padded "safe" viewport.
+    // - Pause auto-follow briefly after user-initiated zoom/drag so the user can inspect.
     try {
       const map = mapInstance.current;
-      const bounds = map.getBounds?.();
-      const innerBounds = bounds?.pad ? bounds.pad(-0.2) : null; // slightly smaller bounds
-      const shouldPan = !innerBounds || !innerBounds.contains || !innerBounds.contains(pos);
-      if (shouldPan) {
-        map.panTo(pos, { animate: true, duration: 0.6 });
-      }
+      const now = Date.now();
+
+      // If the user recently interacted (zoom/drag), don't auto-pan.
+      if (now - (lastUserMapInteractAtRef.current || 0) < 7000) return;
+
+      const bounds = typeof map.getBounds === 'function' ? map.getBounds() : null;
+      const innerBounds = bounds && typeof bounds.pad === 'function' ? bounds.pad(-0.15) : null;
+      const contains = innerBounds && typeof innerBounds.contains === 'function' ? innerBounds.contains(pos) : true;
+      if (contains) return;
+
+      // Throttle auto-pan to avoid constant tile churn.
+      if (now - (lastAutoPanAtRef.current || 0) < 1200) return;
+      lastAutoPanAtRef.current = now;
+
+      map.panTo(pos, { animate: true, duration: 0.4 });
     } catch {
       // ignore
     }
@@ -245,7 +278,35 @@ const MapComponent: React.FC<MapComponentProps> = ({
       });
 
       // Haritayı başlat
-      mapInstance.current = L.map(mapRef.current);
+      // - closePopupOnClick: false => map click doesn't immediately close a just-opened marker popup
+      // - tap: false => avoids "first tap focuses, second tap clicks" on some mobile browsers
+      mapInstance.current = L.map(mapRef.current, {
+        closePopupOnClick: false,
+        tap: false
+      });
+
+      // Defensive: if Leaflet created a tap handler anyway, disable it.
+      try {
+        (mapInstance.current as any)?.tap?.disable?.();
+      } catch {
+        // ignore
+      }
+
+      // Track user interaction so live-follow doesn't fight manual zoom/drag.
+      // Leaflet sets `originalEvent` only for user-initiated events.
+      const markUserInteraction = (e: any) => {
+        try {
+          if (e && e.originalEvent) lastUserMapInteractAtRef.current = Date.now();
+        } catch {
+          // ignore
+        }
+      };
+      try {
+        mapInstance.current.on('dragstart', markUserInteraction);
+        mapInstance.current.on('zoomstart', markUserInteraction);
+      } catch {
+        // ignore
+      }
 
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors',
@@ -288,6 +349,12 @@ const MapComponent: React.FC<MapComponentProps> = ({
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
       if (mapInstance.current) {
+        try {
+          mapInstance.current.off('dragstart');
+          mapInstance.current.off('zoomstart');
+        } catch {
+          // ignore
+        }
         mapInstance.current.remove();
         mapInstance.current = null;
       }
@@ -295,6 +362,22 @@ const MapComponent: React.FC<MapComponentProps> = ({
       setMapReady(false);
     };
   }, [useInlineSvg]);
+
+  // Defensive: if the map instance already existed (e.g., HMR), enforce our options here too.
+  useEffect(() => {
+    if (!mapReady || !mapInstance.current) return;
+    try {
+      (mapInstance.current as any).options.closePopupOnClick = false;
+      (mapInstance.current as any).options.tap = false;
+    } catch {
+      // ignore
+    }
+    try {
+      (mapInstance.current as any)?.tap?.disable?.();
+    } catch {
+      // ignore
+    }
+  }, [mapReady]);
 
   useEffect(() => {
     const updateMarkers = async () => {
