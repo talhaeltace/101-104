@@ -49,7 +49,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ selectedRegion, onRegio
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={toggleOpen}
-        className="inline-flex items-center justify-between gap-2 bg-white border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors duration-150 w-full md:w-[560px]"
+        className="inline-flex items-center justify-between gap-2 bg-white border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors duration-150 w-full"
       >
         <span className="truncate w-full text-left">{selectedLabel}</span>
         {open ? <ChevronUp className="w-4 h-4 text-gray-500 ml-2" /> : <ChevronDown className="w-4 h-4 text-gray-500 ml-2" />}
@@ -59,7 +59,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ selectedRegion, onRegio
         <ul
           role="listbox"
           aria-activedescendant={String(selectedRegion)}
-          className="absolute left-0 z-50 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg py-1 overflow-auto max-h-56 w-full md:w-[560px]"
+          className="absolute left-0 z-50 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg py-1 overflow-auto max-h-56 w-full"
         >
           <li
             role="option"

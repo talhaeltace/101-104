@@ -226,6 +226,19 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
                 </div>
               </div>
 
+              {/* 2 Kapılı (Kartlı Geçiş) */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.isTwoDoorCardAccess ? 'bg-purple-50 border-purple-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.isTwoDoorCardAccess ? 'bg-purple-500' : 'bg-gray-300'}`}>
+                  <CreditCard className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">2 Kapılı (KG)</p>
+                  <p className={`text-sm font-semibold ${location.details.isTwoDoorCardAccess ? 'text-purple-700' : 'text-gray-500'}`}>
+                    {location.details.isTwoDoorCardAccess ? 'Evet' : 'Hayır'}
+                  </p>
+                </div>
+              </div>
+
               {/* Montajı Yapıldı (Kartlı Geçiş) */}
               <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 ${location.details.isInstalledCardAccess ? 'bg-teal-50 border-teal-200' : 'bg-gray-50 border-gray-200'}`}>
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${location.details.isInstalledCardAccess ? 'bg-teal-500' : 'bg-gray-300'}`}>

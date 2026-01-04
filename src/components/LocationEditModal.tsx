@@ -11,6 +11,7 @@ interface LocationEditModalProps {
   isCreate?: boolean;
   isAdmin?: boolean;
   isEditor?: boolean;
+  saveLabel?: string;
   onDelete?: (id: string) => Promise<boolean> | boolean;
 }
 
@@ -22,6 +23,7 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
   isCreate = false,
   isAdmin = false,
   isEditor = false,
+  saveLabel,
   onDelete
 }) => {
   const [editedLocation, setEditedLocation] = useState<Location>(location);
@@ -45,11 +47,17 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
 
   const handleDetailsChange = (field: string, value: any) => {
     if (isEditor) return;
+
+    if (field === 'isTwoDoorCardAccess' && !editedLocation.details.hasCardAccess) {
+      return;
+    }
+
     setEditedLocation(prev => ({
       ...prev,
       details: {
         ...prev.details,
-        [field]: value
+        [field]: value,
+        ...(field === 'hasCardAccess' && !value ? { isTwoDoorCardAccess: false } : {})
       }
     }));
   };
@@ -108,6 +116,7 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
     { id: 'isConfigured', label: 'Konfigüre Edildi', checked: !!editedLocation.details.isConfigured, icon: Activity, activeColor: 'bg-amber-500', activeBg: 'bg-amber-50 border-amber-200' },
     { id: 'isActive', label: 'Devreye Alındı (FW)', checked: !!editedLocation.details.isActive, icon: Zap, activeColor: 'bg-green-500', activeBg: 'bg-green-50 border-green-200' },
     { id: 'hasCardAccess', label: 'Kartlı Geçiş', checked: !!editedLocation.details.hasCardAccess, icon: CreditCard, activeColor: 'bg-purple-500', activeBg: 'bg-purple-50 border-purple-200' },
+    { id: 'isTwoDoorCardAccess', label: '2 Kapılı (KG)', checked: !!editedLocation.details.isTwoDoorCardAccess, icon: CreditCard, activeColor: 'bg-purple-500', activeBg: 'bg-purple-50 border-purple-200' },
     { id: 'isInstalledCardAccess', label: 'Montaj (Kartlı Geçiş)', checked: !!editedLocation.details.isInstalledCardAccess, icon: Settings, activeColor: 'bg-teal-500', activeBg: 'bg-teal-50 border-teal-200' },
     { id: 'isActiveCardAccess', label: 'Devreye Alındı (KG)', checked: !!editedLocation.details.isActiveCardAccess, icon: Zap, activeColor: 'bg-cyan-500', activeBg: 'bg-cyan-50 border-cyan-200' },
     { id: 'hasGPS', label: 'GPS', checked: !!editedLocation.details.hasGPS, icon: Radio, activeColor: 'bg-green-500', activeBg: 'bg-green-50 border-green-200' },
@@ -393,7 +402,7 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
               className="px-5 py-2.5 bg-blue-600 text-white hover:bg-blue-700 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-sm"
             >
               <Save className="w-4 h-4" />
-              {isCreate ? 'Oluştur' : 'Kaydet'}
+              {isCreate ? 'Oluştur' : (saveLabel || 'Kaydet')}
             </button>
           </div>
         </div>

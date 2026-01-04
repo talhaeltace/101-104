@@ -104,3 +104,11 @@ export const notifyPermissionsUpdated = (): void => {
     tag: 'permissions-updated'
   });
 };
+
+// Acceptance/approval workflow notifications (admin)
+export const notifyAcceptanceRequest = (locationName: string, requestedByUsername: string): void => {
+  sendNotification('📝 Kabul Onayı Bekliyor', {
+    body: `${requestedByUsername} kullanıcısı "${locationName}" için kabul onayı istedi. Admin Paneli'nden onaylayabilirsiniz.`,
+    tag: 'acceptance-request'
+  });
+};

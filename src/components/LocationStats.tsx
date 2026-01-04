@@ -8,18 +8,25 @@ interface LocationStatsProps {
 }
 
 const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegionLocations }) => {
+  const sumKg = (locs: Location[], predicate: (loc: Location) => boolean) =>
+    locs.reduce((sum, loc) => {
+      if (!predicate(loc)) return sum;
+      const weight = loc.details.isTwoDoorCardAccess ? 2 : 1;
+      return sum + weight;
+    }, 0);
+
   // Tüm bölgeler için istatistikler
   const activeCount = locations.filter(loc => loc.details.isActive).length;
   const configuredCount = locations.filter(loc => loc.details.isConfigured).length;
   const installedCount = locations.filter(loc => !!loc.details.isInstalled).length;
-  const cardAccessCount = locations.filter(loc => !!loc.details.hasCardAccess).length;
+  const cardAccessCount = sumKg(locations, loc => !!loc.details.hasCardAccess);
   const acceptedCount = locations.filter(loc => !!loc.details.isAccepted).length;
   
   // Seçili bölge için istatistikler
   const selectedActiveCount = selectedRegionLocations.filter(loc => loc.details.isActive).length;
   const selectedConfiguredCount = selectedRegionLocations.filter(loc => loc.details.isConfigured).length;
   const selectedInstalledCount = selectedRegionLocations.filter(loc => !!loc.details.isInstalled).length;
-  const selectedCardAccessCount = selectedRegionLocations.filter(loc => !!loc.details.hasCardAccess).length;
+  const selectedCardAccessCount = sumKg(selectedRegionLocations, loc => !!loc.details.hasCardAccess);
   const selectedAcceptedCount = selectedRegionLocations.filter(loc => !!loc.details.isAccepted).length;
 
   const stats = [
@@ -79,8 +86,8 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
     },
     {
       label: 'Montajı Yapılmış (Kartlı geçiş)',
-      value: locations.filter(loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess).length,
-      selectedValue: selectedRegionLocations.filter(loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess).length,
+      value: sumKg(locations, loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess),
+      selectedValue: sumKg(selectedRegionLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess),
       icon: CreditCard,
       color: 'bg-teal-500',
       textColor: 'text-teal-600',
@@ -88,8 +95,8 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
     },
     {
       label: 'Devreye Alınmış (Kartlı geçiş)',
-      value: locations.filter(loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess).length,
-      selectedValue: selectedRegionLocations.filter(loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess).length,
+      value: sumKg(locations, loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess),
+      selectedValue: sumKg(selectedRegionLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess),
       icon: TrendingUp,
       color: 'bg-cyan-500',
       textColor: 'text-cyan-600',

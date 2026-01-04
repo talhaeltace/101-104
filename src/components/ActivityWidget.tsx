@@ -16,6 +16,7 @@ interface Props {
   lastUpdated?: string | null;
   activities: ActivityEntry[];
   inline?: boolean;
+  fullHeight?: boolean;
   onOpenLocation?: (name: string) => void;
 }
 
@@ -31,7 +32,7 @@ const formatDate = (iso?: string | null) => {
   return d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'long' });
 };
 
-const ActivityWidget: React.FC<Props> = ({ lastUpdated, activities, inline, onOpenLocation }) => {
+const ActivityWidget: React.FC<Props> = ({ lastUpdated, activities, inline, fullHeight, onOpenLocation }) => {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'login' | 'updates' | 'other'>('all');
   const widgetRef = useRef<HTMLDivElement>(null);
@@ -55,7 +56,11 @@ const ActivityWidget: React.FC<Props> = ({ lastUpdated, activities, inline, onOp
   const parseLocationName = (action: string): string | null => {
     if (!action) return null;
     const m = action.match(/^(Güncellendi|Oluşturuldu|Silindi):\s*(.+)$/i);
-    return m ? m[2].trim() : null;
+    if (m) return m[2].trim();
+
+    // Approval logs: "Kabul onayı: <Lokasyon> | ..."
+    const a = action.match(/^Kabul\s*onayı:\s*([^|]+?)(\s*\||$)/i);
+    return a ? a[1].trim() : null;
   };
 
   const getIcon = (action: string) => {
@@ -75,6 +80,9 @@ const ActivityWidget: React.FC<Props> = ({ lastUpdated, activities, inline, onOp
 
   const ActivityItem = ({ item }: { item: ActivityEntry }) => {
     const locationName = parseLocationName(item.action);
+    const actionClass = fullHeight
+      ? 'text-sm text-gray-600 whitespace-normal break-words'
+      : 'text-sm text-gray-600 truncate';
     
     return (
       <div className="flex items-start gap-3 p-3 hover:bg-gray-50 rounded-lg transition-colors border-b border-gray-50 last:border-0">
@@ -102,11 +110,11 @@ const ActivityWidget: React.FC<Props> = ({ lastUpdated, activities, inline, onOp
               }}
               className="group flex items-center gap-1 text-sm text-gray-600 hover:text-blue-600 transition-colors text-left w-full"
             >
-              <span className="truncate">{item.action}</span>
+              <span className={fullHeight ? 'whitespace-normal break-words' : 'truncate'}>{item.action}</span>
               <ChevronRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
             </button>
           ) : (
-            <p className="text-sm text-gray-600 truncate">{item.action}</p>
+            <p className={actionClass}>{item.action}</p>
           )}
         </div>
       </div>
@@ -114,7 +122,7 @@ const ActivityWidget: React.FC<Props> = ({ lastUpdated, activities, inline, onOp
   };
 
   const Content = () => (
-    <div className="flex flex-col h-full max-h-[500px]">
+    <div className={fullHeight ? "flex flex-col h-full" : "flex flex-col h-full max-h-[500px]"}>
       <div className="p-4 border-b border-gray-100 bg-white sticky top-0 z-10">
         <div className="flex items-center justify-between mb-4">
           <div>

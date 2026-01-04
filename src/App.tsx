@@ -21,11 +21,13 @@ import LocationTrackingOverlay from './components/LocationTrackingOverlay';
 import TasksPanel from './components/TasksPanel';
 import { VersionChecker } from './components/VersionChecker';
 import { useLocationTracking } from './hooks/useLocationTracking';
-import { logArrival, logCompletion } from './lib/activityLogger';
-import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted, notifyRouteStarted, notifyPermissionsUpdated } from './lib/notifications';
+import { logActivity, logArrival, logCompletion } from './lib/activityLogger';
+import { logWorkEntry } from './lib/workEntries';
+import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted, notifyRouteStarted, notifyPermissionsUpdated, notifyAcceptanceRequest } from './lib/notifications';
 import type { AuthUser } from './lib/authUser';
 import { DEFAULT_PERMISSIONS } from './lib/userPermissions';
 import { supabase } from './lib/supabase';
+import { createAcceptanceRequest } from './lib/acceptanceRequests';
 import LoginPage from './pages/LoginPage';
 import TeamPanel from './components/TeamPanel';
 import AdminPanel from './components/AdminPanel';
@@ -45,6 +47,8 @@ function App() {
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [userRole, setUserRole] = useState<'admin' | 'user' | 'editor' | 'viewer' | null>(null);
 
+  const mainScrollRef = useRef<HTMLElement | null>(null);
+
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
 
   // Admin Panel state
@@ -59,6 +63,10 @@ function App() {
   // Manual dismissal timestamps for the pulsing "recent work" highlight per region.
   // If a newer activity happens after dismissal, the pulse will automatically re-appear.
   const [dismissedWorkRegionAt, setDismissedWorkRegionAt] = useState<Record<number, number>>({});
+
+  // Desktop sidebar UX: keep the nav within 100vh by collapsing heavy sections.
+  const [activityFullscreenOpen, setActivityFullscreenOpen] = useState(false);
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState<boolean>(true);
 
   // Map locationId -> regionId for fast lookups
   const locationToRegionId = useMemo(() => {
@@ -157,11 +165,29 @@ function App() {
     return activeRoute[idx] ?? null;
   }, [activeRoute, currentRouteIndex]);
 
+  const isRouteTestMode = useMemo(() => {
+    try {
+      return import.meta.env.VITE_ROUTE_TEST_MODE === '1' || localStorage.getItem('mapflow_route_test_mode') === '1';
+    } catch {
+      return import.meta.env.VITE_ROUTE_TEST_MODE === '1';
+    }
+  }, []);
+
   const { trackingState, confirmArrival, completeWork, resetTracking } = useLocationTracking({
     targetLocation: currentTargetLocation,
     userPosition: userLocation,
-    initialWorkState
+    initialWorkState,
+    testMode: isRouteTestMode
   });
+
+  // Auto-confirm arrival in route test mode (after simulated proximity kicks in).
+  const lastAutoArrivedLocationIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!isTrackingRoute) {
+      lastAutoArrivedLocationIdRef.current = null;
+    }
+  }, [isTrackingRoute]);
 
   const buildTrackingSnapshot = (): RouteTrackingStorage => {
     return {
@@ -353,6 +379,20 @@ function App() {
 
     const firstLocation = route[0];
     const nextLocation = route.length > 1 ? route[1] : null;
+
+    // Record that the user is "on the road" toward the first target
+    try {
+      await logActivity({
+        username: currentUser.username,
+        action: `Yola çıktı: ${firstLocation.name}`,
+        location_id: String(firstLocation.id),
+        location_name: firstLocation.name,
+        activity_type: 'general'
+      });
+    } catch {
+      // ignore
+    }
+
     await updateTeamStatus({
       userId: currentUser.id,
       username: currentUser.username,
@@ -611,6 +651,85 @@ function App() {
   }, []);
 
   const showMobileHeader = forceMobileHeader || isNarrow;
+
+  // Admin: listen for new acceptance requests and show a notification
+  useEffect(() => {
+    if (!currentUser || userRole !== 'admin') return;
+
+    const channel = supabase
+      .channel('location_acceptance_requests_admin')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'location_acceptance_requests' },
+        (payload: any) => {
+          const row = payload?.new;
+          if (!row) return;
+          if (String(row.status || 'pending') !== 'pending') return;
+          notifyAcceptanceRequest(String(row.location_name || 'Lokasyon'), String(row.requested_by_username || 'Editör'));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      try { supabase.removeChannel(channel); } catch { /* ignore */ }
+    };
+  }, [currentUser, userRole]);
+
+  // Prevent hash anchors (e.g. Leaflet controls) from jumping scroll to top.
+  // Also: preserve the main scroll container position across clicks, since some third-party
+  // controls can cause an unexpected scroll reset.
+  useEffect(() => {
+    let lastWindowScrollY = 0;
+    let lastMainScrollTop = 0;
+
+    const captureScrollPositions = () => {
+      lastWindowScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+      lastMainScrollTop = mainScrollRef.current?.scrollTop ?? 0;
+    };
+
+    const clickHandlerCapture = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const link = target?.closest?.('a') as HTMLAnchorElement | null;
+      const href = link?.getAttribute?.('href') || '';
+
+      // Hash-only navigation ("#", "#close", etc) commonly scrolls the page to top.
+      // Leaflet and some plugins use <a href="#..."> for controls.
+      if (href.startsWith('#')) {
+        e.preventDefault();
+      }
+
+      // If a click caused the app to unexpectedly jump to the top, restore the previous
+      // scroll position on the next frame.
+      requestAnimationFrame(() => {
+        const main = mainScrollRef.current;
+        if (main && lastMainScrollTop > 2 && main.scrollTop < 2) {
+          main.scrollTop = lastMainScrollTop;
+        }
+
+        const currentWindowY = window.scrollY || document.documentElement.scrollTop || 0;
+        if (lastWindowScrollY > 2 && currentWindowY < 2) {
+          window.scrollTo({ top: lastWindowScrollY, left: 0, behavior: 'auto' });
+        }
+      });
+    };
+
+    // Capture phase is important: Leaflet may stop propagation on its controls.
+    document.addEventListener('pointerdown', captureScrollPositions, true);
+    document.addEventListener('click', clickHandlerCapture, true);
+
+    return () => {
+      document.removeEventListener('pointerdown', captureScrollPositions, true);
+      document.removeEventListener('click', clickHandlerCapture, true);
+    };
+  }, []);
+
+  // Default: on desktop start with heavy panels collapsed to avoid vertical overflow.
+  useEffect(() => {
+    if (!showMobileHeader) {
+      setActivityFullscreenOpen(false);
+      setDesktopSidebarOpen(true);
+    }
+  }, [showMobileHeader]);
 
   // Restore session from localStorage so refresh/geri butonunda login kalır
   const [isAuthChecking, setIsAuthChecking] = useState(true);
@@ -1082,6 +1201,30 @@ function App() {
     }
   };
 
+  // Route test mode: once we are "near" (simulated), auto-confirm arrival.
+  useEffect(() => {
+    if (!isRouteTestMode) return;
+    if (!isTrackingRoute) return;
+    if (!currentTargetLocation) return;
+    if (!trackingState.isNearby) return;
+    if (trackingState.isWorking) return;
+
+    const key = String(currentTargetLocation.id);
+    if (lastAutoArrivedLocationIdRef.current === key) return;
+    lastAutoArrivedLocationIdRef.current = key;
+
+    // Fire and forget; this updates team status + logs arrival.
+    handleArrivalConfirm().catch(() => {
+      // ignore
+    });
+  }, [
+    isRouteTestMode,
+    isTrackingRoute,
+    currentTargetLocation,
+    trackingState.isNearby,
+    trackingState.isWorking
+  ]);
+
   // Handle completion confirmation
   const handleCompletionConfirm = async () => {
     if (!currentUser || !currentTargetLocation) return;
@@ -1124,6 +1267,43 @@ function App() {
       result.duration
     );
 
+    // Mesai source-of-truth: write a dedicated work entry (travel + work)
+    try {
+      const departedAtIso = currentLegStartTime
+        ? currentLegStartTime.toISOString()
+        : (travelMinutesForThisLeg > 0
+          ? new Date(result.startTime.getTime() - travelMinutesForThisLeg * 60000).toISOString()
+          : null);
+
+      await logWorkEntry({
+        userId: String(currentUser.id),
+        username: currentUser.username,
+        locationId: String(currentTargetLocation.id),
+        locationName: currentTargetLocation.name,
+        departedAt: departedAtIso,
+        arrivedAt: result.startTime.toISOString(),
+        completedAt: endTime.toISOString(),
+        travelMinutes: travelMinutesForThisLeg,
+        workMinutes: workMinutes
+      });
+    } catch {
+      // ignore
+    }
+
+    // Editor completion -> request admin acceptance approval for this location.
+    if (userRole === 'editor') {
+      try {
+        await createAcceptanceRequest({
+          locationId: String(currentTargetLocation.id),
+          locationName: currentTargetLocation.name,
+          requestedByUserId: String(currentUser.id),
+          requestedByUsername: currentUser.username
+        });
+      } catch {
+        // ignore
+      }
+    }
+
     // Move to next location in route
     if (activeRoute && currentRouteIndex < activeRoute.length - 1) {
       const nextIndex = currentRouteIndex + 1;
@@ -1136,6 +1316,19 @@ function App() {
       
       // Notify about next location
       notifyNextLocation(nextLocation.name, nextIndex + 1, activeRoute.length);
+
+      // Record that the user is "on the road" toward the next target
+      try {
+        await logActivity({
+          username: currentUser.username,
+          action: `Yola çıktı: ${nextLocation.name}`,
+          location_id: String(nextLocation.id),
+          location_name: nextLocation.name,
+          activity_type: 'general'
+        });
+      } catch {
+        // ignore
+      }
       
       // Update team status: moving to next location (includes route data)
       const futureNext = nextIndex + 1 < activeRoute.length ? activeRoute[nextIndex + 1] : null;
@@ -1396,6 +1589,8 @@ function App() {
 
   const handleLocationSelect = (location: Location) => {
     setSelectedLocation(location);
+    setDetailsModalLocation(location);
+    setIsDetailsModalOpen(true);
   };
 
   const handleLocationDoubleClick = (location: Location) => {
@@ -1412,6 +1607,13 @@ function App() {
   useEffect(() => {
     setFocusLocation(null);
   }, [selectedRegion]);
+
+  // If a user loses view permission, ensure we don't keep a previously-selected region.
+  useEffect(() => {
+    if (!userCanView) {
+      try { setSelectedRegion(0); } catch { /* ignore */ }
+    }
+  }, [userCanView]);
 
   const handleLocationUpdate = async (updatedLocation: Location) => {
     const success = await updateLocation(updatedLocation);
@@ -1544,95 +1746,126 @@ function App() {
       }} />} />
       <Route path="/*" element={
         <RequireAuth>
-          <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-            {/* Header: on mobile show hamburger + logo + region selector only.
-                On desktop show logo + region selector + actions (export, yeni/rota, avatar). */}
-            <header className="fixed inset-x-0 top-0 z-[1000] bg-white/90 backdrop-blur-md border-b border-gray-100 shadow-sm transition-all duration-300" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-              <div className="w-full px-4 sm:px-6 lg:px-8">
-                <div className="flex items-center justify-between h-16 sm:h-20">
-                  <div className="flex items-center gap-4 shrink-0">
-                    {/* Mobile hamburger: visible on mobile devices, placed on far left */}
-                    <div className={showMobileHeader ? 'flex items-center mr-2' : 'hidden'}>
-                      <button
-                        onClick={() => setDrawerOpen(true)}
-                        className="inline-flex items-center justify-center p-2 rounded-xl bg-gray-50 text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        aria-label="Menü"
-                        title="Menü"
-                      >
-                        <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="3" y1="12" x2="21" y2="12"></line>
-                          <line x1="3" y1="6" x2="21" y2="6"></line>
-                          <line x1="3" y1="18" x2="21" y2="18"></line>
-                        </svg>
-                      </button>
-                    </div>
-
-                    {/* Logo - Hidden on mobile, visible on desktop */}
-                    <img src="/nelitlogo.png" alt="NELİT" className={`${showMobileHeader ? 'hidden' : 'block'} h-10 w-auto object-contain`} />
+          <div
+            className={
+              `${showMobileHeader ? 'min-h-screen flex flex-col' : 'h-screen flex overflow-hidden'} ` +
+              'bg-gradient-to-br from-blue-50 to-indigo-100'
+            }
+          >
+            {/* Desktop: left sidebar navigation (text-only). Mobile: keep compact top header + drawer. */}
+            {!showMobileHeader && desktopSidebarOpen && (
+              <aside className="w-80 shrink-0 bg-white/90 backdrop-blur-md border-r border-gray-100 shadow-sm sticky top-0 h-full">
+                <div className="h-full flex flex-col p-4 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <div className="text-base font-semibold text-gray-800">MapFlow</div>
                   </div>
 
-                  {/* Center: region selector - keeps centered and visible on all sizes */}
-                  <div className="flex-1 flex justify-center items-center gap-4 px-4 sm:px-8">
-                    <div className="w-full max-w-xl transform transition-all duration-200 hover:scale-[1.01]">
-                      <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} />
-                    </div>
-                  </div>
+                  <div className="h-6" />
 
-                  {/* Mobile right side: globe button for fullscreen live map (admin only) */}
-                  {canViewLiveMap && (
-                    <div className={showMobileHeader ? 'flex items-center gap-2 shrink-0' : 'hidden'}>
-                      <button
-                        onClick={() => setIsLiveMapOpen(true)}
-                        className="flex items-center justify-center w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-700 shadow-sm hover:shadow-md transition-all duration-200"
-                        title="Canlı Harita"
-                        aria-label="Canlı Harita"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M3.6 9h16.8M3.6 15h16.8M12 3c2.5 2.5 4 5.5 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.5-4-9s1.5-6.5 4-9z" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
+                  {/* Middle area (no scroll): keep content compact to fit 100vh */}
+                  <div className="flex-1 min-w-0">
+                    {userCanView && (
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-gray-500 mb-2">Bölge Seçimi</div>
+                        <div className="min-w-0">
+                          <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} />
+                        </div>
+                      </div>
+                    )}
 
-                  {/* Right side: desktop-only actions (hidden on mobile header) */}
-                  <div className={`${showMobileHeader ? 'hidden' : 'hidden md:flex'} items-center gap-4`}>
                     {userRole === 'admin' && (
-                      <div className="mr-2">
-                        <ActivityWidget lastUpdated={lastUpdated} activities={activities} onOpenLocation={openLocationByName} />
+                      <div className="mt-4">
+                        <button
+                          type="button"
+                          onClick={() => setActivityFullscreenOpen(true)}
+                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm font-semibold text-gray-800 hover:bg-gray-50 transition-colors"
+                        >
+                          <span>Aktivite Geçmişi</span>
+                          <span className="text-xs font-medium text-gray-500">Aç</span>
+                        </button>
                       </div>
                     )}
-                    
+
+                    <div className="mt-4">
+                      <div className="text-xs font-medium text-gray-500 mb-2">Görünüm</div>
+                      <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setView('map')}
+                        className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${view === 'map' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                      >
+                        Harita
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setView('list')}
+                        className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${view === 'list' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                      >
+                        Liste
+                      </button>
+                      </div>
+                    </div>
+
+                    {view === 'map' && userCanView && (
+                      <div className="mt-4">
+                        <div className="text-xs font-medium text-gray-500 mb-2">Harita Modu</div>
+                        <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setMapMode('lokasyon')}
+                          className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${mapMode === 'lokasyon' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                        >
+                          Lokasyon modu
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMapMode('harita')}
+                          className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${mapMode === 'harita' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                        >
+                          Harita modu
+                        </button>
+                        </div>
+                      </div>
+                    )}
+
                     {userCanExport && (
-                      <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-full border border-gray-100">
-                        <button onClick={handleExportExcel} className="p-2 text-gray-600 hover:text-green-600 hover:bg-white rounded-full transition-all duration-200" title="Excel'e Aktar">
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M5 12h14"/></svg>
+                      <div className="mt-4">
+                        <div className="text-xs font-medium text-gray-500 mb-2">Dışa Aktar</div>
+                        <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={handleExportExcel}
+                          className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                        >
+                          Excel'e Aktar
                         </button>
-
-                        <button onClick={handleExportPDF} className="p-2 text-gray-600 hover:text-red-600 hover:bg-white rounded-full transition-all duration-200" title="PDF'e Aktar">
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 8v8M8 12h8"/></svg>
+                        <button
+                          type="button"
+                          onClick={handleExportPDF}
+                          className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                        >
+                          PDF'e Aktar
                         </button>
+                        </div>
                       </div>
                     )}
 
-                    {/* Admin / management actions visible on desktop */}
                     {(userCanCreate || userCanRoute || userCanTeamView || userRole === 'admin') && (
-                      <div className="flex items-center gap-2">
+                      <div className="mt-4">
+                        <div className="text-xs font-medium text-gray-500 mb-2">Yönetim</div>
+                        <div className="grid grid-cols-2 gap-2">
                         {canViewLiveMap && (
                           <button
+                            type="button"
                             onClick={() => setIsLiveMapOpen(true)}
-                            className="flex items-center justify-center w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-700 shadow-sm hover:shadow-md transition-all duration-200"
-                            title="Canlı Harita"
-                            aria-label="Canlı Harita"
+                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
                           >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M3.6 9h16.8M3.6 15h16.8M12 3c2.5 2.5 4 5.5 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.5-4-9s1.5-6.5 4-9z" />
-                            </svg>
+                            Canlı Harita
                           </button>
                         )}
                         {userCanCreate && (
                           <button
+                            type="button"
                             onClick={() => {
                               const template: Location = {
                                 id: '',
@@ -1647,6 +1880,7 @@ function App() {
                                   hasPanos: false,
                                   isActive: false,
                                   isConfigured: false,
+                                    isTwoDoorCardAccess: false,
                                   equipment: {
                                     securityFirewall: 0,
                                     networkSwitch: 0,
@@ -1672,93 +1906,189 @@ function App() {
                               setIsCreateMode(true);
                               setIsEditModalOpen(true);
                             }}
-                            className="flex items-center justify-center w-10 h-10 bg-amber-500 text-white rounded-full hover:bg-amber-600 shadow-sm hover:shadow-md transition-all duration-200"
-                            title="Yeni Lokasyon"
+                              className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors"
                           >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg>
+                            Yeni Lokasyon
                           </button>
                         )}
-
                         {userCanRoute && (
                           <button
+                            type="button"
                             onClick={() => setIsRouteModalOpen(true)}
-                            className="flex items-center justify-center w-10 h-10 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 shadow-sm hover:shadow-md transition-all duration-200"
-                            title="Rota Oluştur"
+                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 transition-colors"
                           >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                            Rota Oluştur
                           </button>
                         )}
-
-                        {/* Tasks Panel Button */}
                         {currentUser && (userCanRoute || userRole === 'editor' || userRole === 'admin') && (
                           <button
+                            type="button"
                             onClick={() => setIsTasksPanelOpen(true)}
-                            className="flex items-center justify-center w-10 h-10 bg-slate-700 text-white rounded-full hover:bg-slate-800 shadow-sm hover:shadow-md transition-all duration-200"
-                            title="Görevler"
+                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
                           >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 5h10M9 9h10M9 13h10M9 17h10M5 5h.01M5 9h.01M5 13h.01M5 17h.01"/></svg>
+                            Görevler
                           </button>
                         )}
-                        
-                        {/* Team Panel Button - based on can_team_view */}
                         {userCanTeamView && (
                           <button
+                            type="button"
                             onClick={() => setIsTeamPanelOpen(true)}
-                            className="flex items-center justify-center w-10 h-10 bg-purple-600 text-white rounded-full hover:bg-purple-700 shadow-sm hover:shadow-md transition-all duration-200"
-                            title="Ekip Durumu"
+                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
                           >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                            Ekip Durumu
                           </button>
                         )}
-                        
-                        {/* Admin Panel Button - Admin only */}
                         {userRole === 'admin' && (
                           <button
+                            type="button"
                             onClick={() => setIsAdminPanelOpen(true)}
-                            className="flex items-center justify-center w-10 h-10 bg-red-600 text-white rounded-full hover:bg-red-700 shadow-sm hover:shadow-md transition-all duration-200"
-                            title="Admin Paneli"
+                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-red-200 bg-red-50 text-red-800 hover:bg-red-100 transition-colors"
                           >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            Admin Paneli
                           </button>
                         )}
+                        </div>
                       </div>
                     )}
+                  </div>
 
-                    {/* Avatar / Logout */}
-                    <div className="flex items-center pl-4 border-l border-gray-200 ml-2">
-                        <div className="flex items-center gap-3 group cursor-pointer">
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-white group-hover:ring-blue-100 transition-all">
-                                {(currentUser?.username ?? 'U').charAt(0).toUpperCase()}
-                            </div>
-                            <div className="hidden xl:block">
-                                <div className="text-sm font-semibold text-gray-700 group-hover:text-blue-600 transition-colors">{currentUser?.username ?? ''}</div>
-                                <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">{userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}</div>
-                            </div>
+                  <div className="mt-auto pt-3 border-t border-gray-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-white">
+                        {(currentUser?.username ?? 'U').charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-gray-800 truncate">{currentUser?.username ?? ''}</div>
+                        <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                          {userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}
                         </div>
-                        <button 
-                            onClick={async () => {
-                              if (currentUser) {
-                                try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
-                                catch (e) { console.warn('pushActivity failed on logout', e); }
-                              }
-                              try { clearTrackingState(); } catch { /* ignore */ }
-                              setUserRole(null);
-                              setCurrentUser(null);
-                              window.location.href = '/login';
-                            }} 
-                            className="ml-4 p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-all duration-200"
-                            title="Çıkış Yap"
-                        >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
-                        </button>
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (currentUser) {
+                          try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
+                          catch (e) { console.warn('pushActivity failed on logout', e); }
+                        }
+                        try { clearTrackingState(); } catch { /* ignore */ }
+                        setUserRole(null);
+                        setCurrentUser(null);
+                        window.location.href = '/login';
+                      }}
+                      className="mt-3 w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-red-600 hover:bg-red-50 transition-colors"
+                    >
+                      Çıkış Yap
+                    </button>
+                  </div>
+                </div>
+              </aside>
+            )}
+
+            {/* Fullscreen Activity History (admin) */}
+            {userRole === 'admin' && activityFullscreenOpen && (
+              <div className="fixed inset-0 z-[1400] bg-white">
+                <div className="h-14 border-b border-gray-100 bg-white/90 backdrop-blur-md flex items-center justify-between px-4">
+                  <div className="text-sm font-semibold text-gray-900">Aktivite Geçmişi</div>
+                  <button
+                    type="button"
+                    onClick={() => setActivityFullscreenOpen(false)}
+                    className="px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    Kapat
+                  </button>
+                </div>
+                <div className="h-[calc(100vh-3.5rem)] overflow-auto bg-gray-50 p-4">
+                  <div className="max-w-5xl mx-auto h-full">
+                    <ActivityWidget
+                      inline={true}
+                      fullHeight={true}
+                      lastUpdated={lastUpdated}
+                      activities={activities}
+                      onOpenLocation={(name) => {
+                        openLocationByName(name);
+                        setActivityFullscreenOpen(false);
+                      }}
+                    />
                   </div>
                 </div>
               </div>
-            </header>
+            )}
 
-            {/* Drawer for mobile containing all actions (export, yeni, rota, görünüm, profile etc.) */}
-            {drawerOpen && (
+            <div className="flex-1 min-w-0 flex flex-col h-full">
+              {/* Desktop sidebar toggle: arrow on the edge (open: collapse, closed: expand) */}
+              {!showMobileHeader && (
+                <button
+                  type="button"
+                  onClick={() => setDesktopSidebarOpen(v => !v)}
+                  className={
+                    desktopSidebarOpen
+                      ? "fixed top-1/2 left-[calc(theme(spacing.80)-0rem)] z-[1200] -translate-y-1/2 w-9 h-14 rounded-l-none rounded-r-2xl bg-white/95 backdrop-blur-md border border-l-0 border-gray-200 shadow-lg hover:bg-white transition-colors flex items-center justify-center"
+                      : "fixed top-1/2 left-0 z-[1200] -translate-y-1/2 w-9 h-14 rounded-l-none rounded-r-2xl bg-white/95 backdrop-blur-md border border-l-0 border-gray-200 shadow-lg hover:bg-white transition-colors flex items-center justify-center"
+                  }
+                  title={desktopSidebarOpen ? 'Menüyü Kapat' : 'Menüyü Aç'}
+                  aria-label={desktopSidebarOpen ? 'Menüyü Kapat' : 'Menüyü Aç'}
+                >
+                  {desktopSidebarOpen ? (
+                    <svg className="w-5 h-5 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M15 18l-6-6 6-6" />
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 18l6-6-6-6" />
+                    </svg>
+                  )}
+                </button>
+              )}
+              {showMobileHeader && (
+                <header className="fixed inset-x-0 top-0 z-[1000] bg-white/90 backdrop-blur-md border-b border-gray-100 shadow-sm transition-all duration-300" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+                  <div className="w-full px-4 sm:px-6 lg:px-8">
+                    <div className="flex items-center justify-between h-16 sm:h-20">
+                      <div className="flex items-center gap-4 shrink-0">
+                        <div className="flex items-center mr-2">
+                          <button
+                            onClick={() => setDrawerOpen(true)}
+                            className="inline-flex items-center justify-center p-2 rounded-xl bg-gray-50 text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                            aria-label="Menü"
+                            title="Menü"
+                          >
+                            <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="3" y1="12" x2="21" y2="12"></line>
+                              <line x1="3" y1="6" x2="21" y2="6"></line>
+                              <line x1="3" y1="18" x2="21" y2="18"></line>
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex-1 flex justify-center items-center gap-4 px-4 sm:px-8">
+                        {userCanView ? (
+                          <div className="w-full max-w-xl transform transition-all duration-200 hover:scale-[1.01]">
+                            <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} />
+                          </div>
+                        ) : (
+                          <div className="text-sm sm:text-base font-semibold text-gray-800">MapFlow</div>
+                        )}
+                      </div>
+
+                      {canViewLiveMap && (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => setIsLiveMapOpen(true)}
+                            className="px-3 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 shadow-sm hover:shadow-md transition-all duration-200 text-sm font-semibold"
+                            title="Canlı Harita"
+                          >
+                            Canlı Harita
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </header>
+              )}
+
+            {/* Drawer for mobile containing all actions */}
+            {showMobileHeader && drawerOpen && (
               <>
                 <div
                   className="fixed inset-0 bg-black/30 z-[1100]"
@@ -1788,34 +2118,58 @@ function App() {
                   </div>
 
                   <div className="space-y-4">
-                    {/* Quick activity peek for admins */}
                     {userRole === 'admin' && (
                       <div>
-                        <ActivityWidget inline={true} lastUpdated={lastUpdated} activities={activities} onOpenLocation={openLocationByName} />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActivityFullscreenOpen(true);
+                            setDrawerOpen(false);
+                          }}
+                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm font-semibold text-gray-800 hover:bg-gray-50 transition-colors"
+                        >
+                          <span>Aktivite Geçmişi</span>
+                          <span className="text-xs font-medium text-gray-500">Aç</span>
+                        </button>
                       </div>
                     )}
+
                     {userCanExport && (
                       <div>
-                        <div className="text-sm font-medium mb-2">Dışa Aktar</div>
-                        <div className="flex gap-2">
-                          <button onClick={() => { handleExportExcel(); setDrawerOpen(false); }} className="flex-1 px-3 py-2 bg-white border rounded-md text-sm shadow-sm">Excel'e Aktar</button>
-                          <button onClick={() => { handleExportPDF(); setDrawerOpen(false); }} className="flex-1 px-3 py-2 bg-white border rounded-md text-sm shadow-sm">PDF'e Aktar</button>
+                        <div className="text-xs font-medium text-gray-500 mb-2">Dışa Aktar</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => { handleExportExcel(); setDrawerOpen(false); }}
+                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Excel'e Aktar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { handleExportPDF(); setDrawerOpen(false); }}
+                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            PDF'e Aktar
+                          </button>
                         </div>
                       </div>
                     )}
 
                     <div>
-                      <div className="text-sm font-medium mb-2">Görünüm</div>
-                      <div className="flex gap-2">
+                      <div className="text-xs font-medium text-gray-500 mb-2">Görünüm</div>
+                      <div className="grid grid-cols-2 gap-2">
                         <button
+                          type="button"
                           onClick={() => { setView('map'); setDrawerOpen(false); }}
-                          className={`flex-1 px-3 py-2 rounded-md text-sm ${view === 'map' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}
+                          className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${view === 'map' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
                         >
                           Harita
                         </button>
                         <button
+                          type="button"
                           onClick={() => { setView('list'); setDrawerOpen(false); }}
-                          className={`flex-1 px-3 py-2 rounded-md text-sm ${view === 'list' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}
+                          className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${view === 'list' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
                         >
                           Liste
                         </button>
@@ -1823,17 +2177,18 @@ function App() {
                     </div>
 
                     <div>
-                      <div className="text-sm font-medium mb-2">Hesap</div>
+                      <div className="text-xs font-medium text-gray-500 mb-2">Hesap</div>
                       {userRole ? (
                         <>
                           <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-full bg-indigo-500 flex items-center justify-center text-white font-semibold text-sm">{(currentUser?.username ?? 'U').charAt(0).toUpperCase()}</div>
+                            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-white">{(currentUser?.username ?? 'U').charAt(0).toUpperCase()}</div>
                             <div>
-                              <div className="font-medium">{currentUser?.username}</div>
-                              <div className="text-xs text-gray-500">{userRole === 'admin' ? 'Admin' : userRole === 'editor' ? 'Editor' : userRole === 'viewer' ? 'Viewer' : 'User'}</div>
+                              <div className="text-sm font-semibold text-gray-800">{currentUser?.username}</div>
+                              <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">{userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}</div>
                             </div>
                           </div>
                           <button
+                            type="button"
                             onClick={async () => {
                               if (currentUser) {
                                 try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
@@ -1844,22 +2199,23 @@ function App() {
                               setCurrentUser(null);
                               window.location.href = '/login';
                             }}
-                            className="mt-2 w-full px-3 py-2 bg-red-600 text-white rounded-md"
+                            className="mt-3 w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-red-600 hover:bg-red-50 transition-colors"
                           >
-                            Çıkış
+                            Çıkış Yap
                           </button>
                         </>
                       ) : (
-                        <button onClick={() => window.location.href = '/login'} className="w-full px-3 py-2 bg-blue-600 text-white rounded-md">Giriş</button>
+                        <button type="button" onClick={() => window.location.href = '/login'} className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors">Giriş</button>
                       )}
                     </div>
 
                     {(userCanCreate || userCanRoute || userCanTeamView || userRole === 'admin') && (
                       <div>
-                        <div className="text-sm font-medium mb-2">Yönetim</div>
-                        <div className="flex gap-2">
+                        <div className="text-xs font-medium text-gray-500 mb-2">Yönetim</div>
+                        <div className="grid grid-cols-2 gap-2">
                           {userCanCreate && (
                             <button
+                              type="button"
                               onClick={() => {
                                 const template: Location = {
                                   id: '',
@@ -1874,6 +2230,7 @@ function App() {
                                     hasPanos: false,
                                     isActive: false,
                                     isConfigured: false,
+                                      isTwoDoorCardAccess: false,
                                     equipment: {
                                       securityFirewall: 0,
                                       networkSwitch: 0,
@@ -1900,7 +2257,7 @@ function App() {
                                 setIsEditModalOpen(true);
                                 setDrawerOpen(false);
                               }}
-                              className="flex-1 px-3 py-2 bg-yellow-500 text-white rounded-md text-sm font-medium hover:bg-yellow-600 shadow-sm"
+                              className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors"
                             >
                               Yeni Lokasyon
                             </button>
@@ -1908,8 +2265,9 @@ function App() {
 
                           {userCanRoute && (
                             <button
+                              type="button"
                               onClick={() => { setIsRouteModalOpen(true); setDrawerOpen(false); }}
-                              className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 shadow-sm"
+                              className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 transition-colors"
                             >
                               Rota Oluştur
                             </button>
@@ -1919,10 +2277,10 @@ function App() {
                         {/* Tasks Panel Button - (mobile drawer) */}
                         {currentUser && (userCanRoute || userRole === 'editor' || userRole === 'admin') && (
                           <button
+                            type="button"
                             onClick={() => { setIsTasksPanelOpen(true); setDrawerOpen(false); }}
-                            className="w-full mt-2 px-3 py-2 bg-slate-700 text-white rounded-md text-sm font-medium hover:bg-slate-800 shadow-sm flex items-center justify-center gap-2"
+                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
                           >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 5h10M9 9h10M9 13h10M9 17h10M5 5h.01M5 9h.01M5 13h.01M5 17h.01"/></svg>
                             Görevler
                           </button>
                         )}
@@ -1930,10 +2288,10 @@ function App() {
                         {/* Team Panel Button - based on can_team_view (mobile drawer) */}
                         {userCanTeamView && (
                           <button
+                            type="button"
                             onClick={() => { setIsTeamPanelOpen(true); setDrawerOpen(false); }}
-                            className="w-full mt-2 px-3 py-2 bg-purple-600 text-white rounded-md text-sm font-medium hover:bg-purple-700 shadow-sm flex items-center justify-center gap-2"
+                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
                           >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                             Ekip Durumu
                           </button>
                         )}
@@ -1941,10 +2299,10 @@ function App() {
                         {/* Admin Panel Button - Admin only (mobile drawer) */}
                         {userRole === 'admin' && (
                           <button
+                            type="button"
                             onClick={() => { setIsAdminPanelOpen(true); setDrawerOpen(false); }}
-                            className="w-full mt-2 px-3 py-2 bg-red-600 text-white rounded-md text-sm font-medium hover:bg-red-700 shadow-sm flex items-center justify-center gap-2"
+                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-red-200 bg-red-50 text-red-800 hover:bg-red-100 transition-colors"
                           >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                             Admin Paneli
                           </button>
                         )}
@@ -1955,8 +2313,8 @@ function App() {
               </>
             )}
 
-            {/* main: pad top so content doesn't hide under fixed header */}
-            <main className="pt-20 sm:pt-24 w-full px-4 sm:px-6 lg:px-8 pb-20">
+            {/* main: pad top only on mobile (fixed header). Desktop uses sidebar layout. */}
+            <main ref={mainScrollRef} className={`${showMobileHeader ? 'pt-20 sm:pt-24' : 'pt-6'} flex-1 overflow-y-auto w-full px-4 sm:px-6 lg:px-8 pb-20`}>
               {userCanView && (
                 <div className="mb-4">
                   <div className="grid grid-cols-1 gap-4">
@@ -2110,85 +2468,30 @@ function App() {
                   </div>
                 )
               ) : (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-end">
-                    <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
-                      <button
-                        type="button"
-                        onClick={() => setMapMode('lokasyon')}
-                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                          mapMode === 'lokasyon'
-                            ? 'bg-indigo-600 text-white'
-                            : 'text-gray-700 hover:bg-gray-100'
-                        }`}
+                <div className="min-h-[50vh] flex items-center justify-center">
+                  <div className="bg-white rounded-xl shadow-md border border-gray-200 px-6 py-6 max-w-md text-center">
+                    <div className="mx-auto mb-3 w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                      <svg
+                        className="w-6 h-6"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
                       >
-                        Lokasyon modu
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setMapMode('harita')}
-                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                          mapMode === 'harita'
-                            ? 'bg-indigo-600 text-white'
-                            : 'text-gray-700 hover:bg-gray-100'
-                        }`}
-                      >
-                        Harita modu
-                      </button>
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
                     </div>
-                  </div>
-
-                  <div
-                    className="bg-black rounded-t-lg shadow-md border border-gray-200 w-full overflow-hidden"
-                    style={{ minHeight: 'calc(var(--vh, 1vh) * 40)' }}
-                  >
-                    <div className="map-responsive w-full">
-                      <MapComponent
-                        regions={locations}
-                        locations={currentLocations}
-                        selectedRegion={selectedRegion}
-                        activeWorkRegionIds={activeWorkRegionIds}
-                        onDismissActiveWorkRegion={dismissActiveWorkRegion}
-                        onLocationSelect={handleLocationSelect}
-                        onRegionSelect={(id) => setSelectedRegion(id)}
-                        focusLocation={focusLocation}
-                        setFocusLocation={setFocusLocation}
-                        activeRoute={activeRoute}
-                        currentRouteIndex={currentRouteIndex}
-                        userLocation={userLocation}
-                        calculateDistance={calculateDistance}
-                        followMemberLocation={followMember}
-                        useInlineSvg={mapMode === 'lokasyon'}
-                        viewRestricted={!userCanView}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="min-h-[30vh] flex items-center justify-center">
-                    <div className="bg-white rounded-xl shadow-md border border-gray-200 px-6 py-6 max-w-md text-center">
-                      <div className="mx-auto mb-3 w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
-                        <svg
-                          className="w-6 h-6"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                      </div>
-                      <h2 className="text-lg font-semibold text-gray-800 mb-1">Görüntüleme yetkiniz yok</h2>
-                      <p className="text-sm text-gray-600">
-                        Bu hesap için lokasyonların detaylı listesi ve istatistikleri gizlendi.
-                        Lütfen yöneticinizle iletişime geçerek
-                        <span className="font-medium"> Görüntüle </span>
-                        yetkisini aktif etmelerini isteyin.
-                      </p>
-                    </div>
+                    <h2 className="text-lg font-semibold text-gray-800 mb-1">Görüntüleme yetkiniz yok</h2>
+                    <p className="text-sm text-gray-600">
+                      Bu hesap için lokasyonların detaylı listesi ve istatistikleri gizlendi.
+                      Lütfen yöneticinizle iletişime geçerek
+                      <span className="font-medium"> Görüntüle </span>
+                      yetkisini aktif etmelerini isteyin.
+                    </p>
                   </div>
                 </div>
               )}
@@ -2344,6 +2647,7 @@ function App() {
                 />
               )}
             </main>
+            </div>
           </div>
         </RequireAuth>
       } />

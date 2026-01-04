@@ -44,6 +44,8 @@ export interface Location {
     hasCardAccess?: boolean;
   /** Kartlı geçiş için devreye alınmış (DB-backed flag) */
   isActiveCardAccess?: boolean;
+    /** Kartlı geçiş 2 kapılı mı? (KG için 2 sayılır) */
+    isTwoDoorCardAccess?: boolean;
   };
 }
 

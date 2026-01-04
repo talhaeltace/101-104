@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Users, MapPin, Navigation, CheckCircle2, Clock, X, RefreshCw, ChevronRight, Activity, Car, Briefcase, Timer, TrendingUp, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { listWorkEntries, type WorkEntryRow } from '../lib/workEntries';
 import { formatDuration as formatMinutes } from '../lib/teamStatus';
 import type { Region } from '../data/regions';
 import { createTask, type Task } from '../lib/tasks';
@@ -665,6 +666,175 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
     return users;
   };
 
+  const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, endYmd: string): MesaiUserSummary[] => {
+    const userMap = new Map<string, MesaiUserSummary>();
+
+    const ensureUser = (username: string) => {
+      const norm = normalizeUsername(username);
+      const key = norm || 'bilinmeyen';
+      let u = userMap.get(key);
+      if (!u) {
+        const emptyTotal: MesaiDaySummary = {
+          date: `${startYmd}..${endYmd}`,
+          completedCount: 0,
+          workMinutes: 0,
+          travelMinutes: 0,
+          totalMinutes: 0,
+          normalWorkMinutes: 0,
+          overtimeWorkMinutes: 0,
+          normalTravelMinutes: 0,
+          overtimeTravelMinutes: 0,
+          normalMinutes: 0,
+          overtimeMinutes: 0,
+          firstAt: null,
+          lastAt: null
+        };
+        u = { username: username || key, days: {}, total: emptyTotal, completions: [] };
+        userMap.set(key, u);
+      }
+      return u;
+    };
+
+    const ensureDay = (u: MesaiUserSummary, date: string) => {
+      let d = u.days[date];
+      if (!d) {
+        d = {
+          date,
+          completedCount: 0,
+          workMinutes: 0,
+          travelMinutes: 0,
+          totalMinutes: 0,
+          normalWorkMinutes: 0,
+          overtimeWorkMinutes: 0,
+          normalTravelMinutes: 0,
+          overtimeTravelMinutes: 0,
+          normalMinutes: 0,
+          overtimeMinutes: 0,
+          firstAt: null,
+          lastAt: null
+        };
+        u.days[date] = d;
+      }
+      return d;
+    };
+
+    const bumpWindow = (d: MesaiDaySummary, iso: string | null) => {
+      if (!iso) return;
+      if (!d.firstAt || new Date(iso).getTime() < new Date(d.firstAt).getTime()) d.firstAt = iso;
+      if (!d.lastAt || new Date(iso).getTime() > new Date(d.lastAt).getTime()) d.lastAt = iso;
+    };
+
+    for (const r of rows) {
+      const u = ensureUser(r.username);
+
+      const travelMins = Number(r.travel_minutes || 0);
+      const workMins = Number(r.work_minutes || 0);
+      const departedAt = r.departed_at || (travelMins > 0 ? new Date(new Date(r.arrived_at).getTime() - travelMins * 60000).toISOString() : null);
+      const arrivedAt = r.arrived_at;
+      const completedAt = r.completed_at;
+
+      // Travel allocation (departed -> arrived)
+      if (travelMins > 0 && departedAt && arrivedAt) {
+        const alloc = allocateMinutesBySchedule(departedAt, arrivedAt);
+        for (const [ymd, a] of alloc.entries()) {
+          const day = ensureDay(u, ymd);
+          day.travelMinutes += a.total;
+          day.normalTravelMinutes += a.normal;
+          day.overtimeTravelMinutes += a.overtime;
+          bumpWindow(day, departedAt);
+          bumpWindow(day, arrivedAt);
+        }
+      } else if (arrivedAt) {
+        bumpWindow(ensureDay(u, toLocalYmd(arrivedAt)), arrivedAt);
+      }
+
+      // Work allocation (arrived -> completed)
+      if (workMins > 0 && arrivedAt && completedAt) {
+        const alloc = allocateMinutesBySchedule(arrivedAt, completedAt);
+        for (const [ymd, a] of alloc.entries()) {
+          const day = ensureDay(u, ymd);
+          day.workMinutes += a.total;
+          day.normalWorkMinutes += a.normal;
+          day.overtimeWorkMinutes += a.overtime;
+          bumpWindow(day, arrivedAt);
+          bumpWindow(day, completedAt);
+        }
+      } else if (completedAt) {
+        bumpWindow(ensureDay(u, toLocalYmd(completedAt)), completedAt);
+      }
+
+      // Completion count attributed to completion day.
+      const completionDay = toLocalYmd(completedAt);
+      ensureDay(u, completionDay).completedCount += 1;
+
+      u.completions.push({
+        date: completionDay,
+        locationName: r.location_name || 'Lokasyon',
+        departedAt,
+        arrivedAt,
+        completedAt,
+        travelMinutes: travelMins,
+        workMinutes: workMins
+      });
+    }
+
+    const users = Array.from(userMap.values());
+    for (const u of users) {
+      const dayKeys = Object.keys(u.days).sort();
+      let firstAt: string | null = null;
+      let lastAt: string | null = null;
+      let completedCount = 0;
+      let workMinutes = 0;
+      let travelMinutes = 0;
+      let normalMinutes = 0;
+      let overtimeMinutes = 0;
+      let normalWorkMinutes = 0;
+      let overtimeWorkMinutes = 0;
+      let normalTravelMinutes = 0;
+      let overtimeTravelMinutes = 0;
+      for (const k of dayKeys) {
+        const d = u.days[k];
+        d.totalMinutes = (d.workMinutes || 0) + (d.travelMinutes || 0);
+        d.normalMinutes = (d.normalWorkMinutes || 0) + (d.normalTravelMinutes || 0);
+        d.overtimeMinutes = (d.overtimeWorkMinutes || 0) + (d.overtimeTravelMinutes || 0);
+        completedCount += d.completedCount;
+        workMinutes += d.workMinutes;
+        travelMinutes += d.travelMinutes;
+        normalMinutes += d.normalMinutes;
+        overtimeMinutes += d.overtimeMinutes;
+        normalWorkMinutes += d.normalWorkMinutes;
+        overtimeWorkMinutes += d.overtimeWorkMinutes;
+        normalTravelMinutes += d.normalTravelMinutes;
+        overtimeTravelMinutes += d.overtimeTravelMinutes;
+        if (d.firstAt && (!firstAt || new Date(d.firstAt).getTime() < new Date(firstAt).getTime())) firstAt = d.firstAt;
+        if (d.lastAt && (!lastAt || new Date(d.lastAt).getTime() > new Date(lastAt).getTime())) lastAt = d.lastAt;
+      }
+      u.total = {
+        date: `${startYmd}..${endYmd}`,
+        completedCount,
+        workMinutes,
+        travelMinutes,
+        totalMinutes: workMinutes + travelMinutes,
+        normalWorkMinutes,
+        overtimeWorkMinutes,
+        normalTravelMinutes,
+        overtimeTravelMinutes,
+        normalMinutes,
+        overtimeMinutes,
+        firstAt,
+        lastAt
+      };
+      u.completions.sort((a, b) => {
+        const at = a.completedAt || a.arrivedAt || a.departedAt || '';
+        const bt = b.completedAt || b.arrivedAt || b.departedAt || '';
+        return new Date(bt).getTime() - new Date(at).getTime();
+      });
+    }
+
+    users.sort((a, b) => (b.total.totalMinutes || 0) - (a.total.totalMinutes || 0));
+    return users;
+  };
+
   const fetchMesaiReport = async () => {
     if (!isAdmin) return;
     try {
@@ -674,40 +844,19 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
       const startIso = startOfLocalDayIso(mesaiStart);
       const endIso = endOfLocalDayIso(mesaiEnd);
 
-      const { data, error: fetchError } = await supabase
-        .from('activities')
-        .select('*')
-        .gte('created_at', startIso)
-        .lte('created_at', endIso)
-        .order('created_at', { ascending: false })
-        .limit(5000);
-
-      if (fetchError) {
-        console.warn('Mesai report fetch error', fetchError);
-        setMesaiError('Mesai raporu yüklenemedi');
+      const res = await listWorkEntries({ startIso, endIso, limit: 5000 });
+      if (!res.ok) {
+        setMesaiError('Mesai tablosu bulunamadı veya erişilemedi (work_entries). Supabase migration çalıştırılmalı.');
         setMesaiByUser([]);
         return;
       }
 
-      const rows: ActivityRow[] = (data || []).map((r: any) => ({
-        id: String(r.id),
-        username: r.username,
-        action: r.action,
-        location_id: r.location_id,
-        location_name: r.location_name,
-        arrival_time: r.arrival_time,
-        completion_time: r.completion_time,
-        duration_minutes: r.duration_minutes,
-        activity_type: r.activity_type,
-        created_at: r.created_at
-      }));
-
-      const filtered = rows.filter((r) => {
+      const filtered = res.rows.filter((r) => {
         const k = normalizeUsername(r.username);
         return k && allowedUserSet.has(k);
       });
 
-      setMesaiByUser(computeMesaiFromActivities(filtered, mesaiStart, mesaiEnd));
+      setMesaiByUser(computeMesaiFromWorkEntries(filtered, mesaiStart, mesaiEnd));
     } catch (e) {
       console.warn('Mesai report exception', e);
       setMesaiError('Mesai raporu yüklenemedi');
@@ -1497,8 +1646,8 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
 
         {/* Assign Task Modal */}
         {isAssignTaskModalOpen && taskMember && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1210] p-4">
-            <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
+          <div className="fixed inset-0 bg-black/50 flex items-start sm:items-center justify-center z-[1210] p-4 overflow-y-auto">
+            <div className="bg-white rounded-xl p-4 sm:p-6 w-full max-w-lg shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto">
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div>
                   <h3 className="text-lg font-bold">Görev Ata</h3>
@@ -1655,8 +1804,8 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
 
         {/* Task Details Modal */}
         {isTaskDetailsOpen && taskDetailsMember && taskDetailsTask && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1210] p-4">
-            <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
+          <div className="fixed inset-0 bg-black/50 flex items-start sm:items-center justify-center z-[1210] p-4 overflow-y-auto">
+            <div className="bg-white rounded-xl p-4 sm:p-6 w-full max-w-lg shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto">
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div>
                   <h3 className="text-lg font-bold">Mevcut Görev</h3>
