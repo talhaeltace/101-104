@@ -4,22 +4,43 @@ android {
     namespace "com.nelit.project101104"
     compileSdk rootProject.ext.compileSdkVersion
 
-    def hasReleaseKeystore = false
-    try {
-        if (project.hasProperty('RELEASE_STORE_FILE')) {
-            def f = file(RELEASE_STORE_FILE)
-            hasReleaseKeystore = (f != null && f.exists())
+    def propOrEnv = { String key ->
+        def v = project.findProperty(key)
+        if (v == null || v.toString().trim().isEmpty()) {
+            v = System.getenv(key)
         }
-    } catch (ignored) {
-        hasReleaseKeystore = false
+        return (v == null) ? null : v.toString().trim()
     }
+
+    def resolveExistingFile = { String path ->
+        if (path == null || path.trim().isEmpty()) {
+            return null
+        }
+        // Try common locations:
+        // - android/app/<path>  (project.file)
+        // - android/<path>      (rootProject.file)
+        // - repoRoot/<path>     (rootProject.file("../..."))
+        def candidates = [
+                project.file(path),
+                rootProject.file(path),
+                rootProject.file("../${path}")
+        ]
+        return candidates.find { it != null && it.exists() }
+    }
+
+    def releaseStoreFilePath = propOrEnv('RELEASE_STORE_FILE')
+    def releaseKeystoreFile = resolveExistingFile(releaseStoreFilePath)
+    def hasReleaseKeystore = (releaseKeystoreFile != null)
+    def releaseStorePassword = propOrEnv('RELEASE_STORE_PASSWORD')
+    def releaseKeyAlias = propOrEnv('RELEASE_KEY_ALIAS')
+    def releaseKeyPassword = propOrEnv('RELEASE_KEY_PASSWORD')
 
     defaultConfig {
         applicationId "com.nelit.project101104"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 14
-        versionName "2.1.3"
+        versionCode 18
+        versionName "2.1.5"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -31,13 +52,14 @@ android {
     signingConfigs {
         release {
             // Keystore bilgileri - gradle.properties veya environment variables'dan alınır
-            if (hasReleaseKeystore) {
-                storeFile file(RELEASE_STORE_FILE)
-                storePassword RELEASE_STORE_PASSWORD
-                keyAlias RELEASE_KEY_ALIAS
-                keyPassword RELEASE_KEY_PASSWORD
+            if (hasReleaseKeystore && releaseStorePassword && releaseKeyAlias && releaseKeyPassword) {
+                storeFile releaseKeystoreFile
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
             } else {
-                logger.lifecycle("Release keystore not found; building unsigned release APK")
+                logger.lifecycle("Release signing not configured; building UNSIGNED release bundle. Google Play will reject this AAB.")
+                logger.lifecycle("Expected keystore (from RELEASE_STORE_FILE) in one of: android/app/, android/, or repo root. Value: ${releaseStoreFilePath}")
             }
         }
     }
@@ -47,7 +69,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            if (hasReleaseKeystore) {
+            if (hasReleaseKeystore && releaseStorePassword && releaseKeyAlias && releaseKeyPassword) {
                 signingConfig signingConfigs.release
             }
         }
