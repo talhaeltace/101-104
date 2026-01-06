@@ -33,6 +33,8 @@ jobs:
         BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
         KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       run: |
+        set -euo pipefail
+
         CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
         PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
         KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
@@ -57,16 +59,30 @@ jobs:
         security find-identity -v -p codesigning $KEYCHAIN_PATH || true
 
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-        cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/101104_App_Store.mobileprovision
+
+        # Install provisioning profile using its UUID (Xcode's expected convention)
+        PP_PLIST=$RUNNER_TEMP/build_pp.plist
+        security cms -D -i $PP_PATH > $PP_PLIST
+        PP_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' $PP_PLIST)
+        PP_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' $PP_PLIST)
+        cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/$PP_UUID.mobileprovision
+        echo "Installed provisioning profile: $PP_NAME ($PP_UUID)"
     
     - name: Build iOS
       run: |
+        set -euo pipefail
+
+        LOG_PATH=$RUNNER_TEMP/xcodebuild-archive.log
+        RESULT_BUNDLE=$RUNNER_TEMP/App.xcresult
+
         xcodebuild -workspace ios/App/App.xcworkspace \
           -scheme App \
           -sdk iphoneos \
           -configuration Release \
+          -destination 'generic/platform=iOS' \
           -archivePath $RUNNER_TEMP/App.xcarchive \
-          archive
+          -resultBundlePath $RESULT_BUNDLE \
+          archive | tee $LOG_PATH
         
         xcodebuild -exportArchive \
           -archivePath $RUNNER_TEMP/App.xcarchive \
@@ -93,3 +109,12 @@ jobs:
       with:
         name: ios-app
         path: ${{ runner.temp }}/build/*.ipa
+
+    - name: Upload iOS build logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ios-build-logs
+        path: |
+          ${{ runner.temp }}/xcodebuild-archive.log
+          ${{ runner.temp }}/App.xcresult
