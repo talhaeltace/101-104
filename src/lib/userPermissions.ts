@@ -149,26 +149,30 @@ export async function createUser(
   phone?: string
 ): Promise<{ success: boolean; error?: string; data?: { id: string } }> {
   try {
-    const { data, error } = await supabase
-      .from('app_users')
-      .insert({
-        username,
-        password_hash: password,
-        role,
-        email: email || null,
-        full_name: fullName || null,
-        phone: phone || null,
-        is_active: true
-      })
-      .select('id')
-      .single();
+    const params: Record<string, any> = {
+      p_username: username,
+      p_password: password,
+      p_role: role
+    };
+
+    // Only include optional args when actually provided.
+    if (email != null && String(email).trim() !== '') params.p_email = email;
+    if (fullName != null && String(fullName).trim() !== '') params.p_full_name = fullName;
+    if (phone != null && String(phone).trim() !== '') params.p_phone = phone;
+
+    const { data, error } = await supabase.rpc('admin_create_app_user', params);
 
     if (error) {
       console.error('Failed to create user:', error);
       return { success: false, error: error.message };
     }
 
-    return { success: true, data: { id: data.id } };
+    const payload = data as any;
+    if (!payload?.success) {
+      return { success: false, error: payload?.error || 'Kullanıcı oluşturulamadı' };
+    }
+
+    return { success: true, data: { id: String(payload.user_id) } };
   } catch (err) {
     console.error('Create user error:', err);
     return { success: false, error: 'Kullanıcı oluşturulurken hata oluştu' };
@@ -191,23 +195,30 @@ export async function updateUser(
   }
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const updateData: Record<string, unknown> = {};
-    if (updates.username) updateData.username = updates.username;
-    if (updates.password) updateData.password_hash = updates.password;
-    if (updates.role) updateData.role = updates.role;
-    if (updates.email !== undefined) updateData.email = updates.email || null;
-    if (updates.fullName !== undefined) updateData.full_name = updates.fullName || null;
-    if (updates.phone !== undefined) updateData.phone = updates.phone || null;
-    if (updates.isActive !== undefined) updateData.is_active = updates.isActive;
+    const params: Record<string, any> = {
+      p_user_id: userId
+    };
 
-    const { error } = await supabase
-      .from('app_users')
-      .update(updateData)
-      .eq('id', userId);
+    // IMPORTANT: PostgREST RPC signature matching considers provided argument names.
+    // Passing extra keys (even with null) can fail if the DB function signature is older.
+    if (updates.username != null && String(updates.username).trim() !== '') params.p_username = updates.username;
+    if (updates.password != null && String(updates.password).length > 0) params.p_password = updates.password;
+    if (updates.role != null && String(updates.role).trim() !== '') params.p_role = updates.role;
+    if (updates.email != null && String(updates.email).trim() !== '') params.p_email = updates.email;
+    if (updates.fullName != null && String(updates.fullName).trim() !== '') params.p_full_name = updates.fullName;
+    if (updates.phone != null && String(updates.phone).trim() !== '') params.p_phone = updates.phone;
+    if (typeof updates.isActive === 'boolean') params.p_is_active = updates.isActive;
+
+    const { data, error } = await supabase.rpc('admin_update_app_user', params);
 
     if (error) {
       console.error('Failed to update user:', error);
       return { success: false, error: error.message };
+    }
+
+    const payload = data as any;
+    if (!payload?.success) {
+      return { success: false, error: payload?.error || 'Kullanıcı güncellenemedi' };
     }
 
     return { success: true };

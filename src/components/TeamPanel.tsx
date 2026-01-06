@@ -1,8 +1,6 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Users, MapPin, Navigation, CheckCircle2, Clock, X, RefreshCw, ChevronRight, Activity, Car, Briefcase, Timer, TrendingUp, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { listWorkEntries, type WorkEntryRow } from '../lib/workEntries';
-import { formatDuration as formatMinutes } from '../lib/teamStatus';
 import type { Region } from '../data/regions';
 import { createTask, type Task } from '../lib/tasks';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
@@ -49,7 +47,6 @@ interface Props {
   onFocusMember?: (memberId: string, username: string, lat: number, lng: number) => void;
   currentUserId: string | null;
   currentUsername: string | null;
-  isAdmin?: boolean;
   regions: Region[];
 }
 
@@ -116,253 +113,13 @@ const formatTime = (isoString: string) => {
   return new Date(isoString).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 };
 
-type ActivityRow = {
-  id: string;
-  username: string;
-  action: string;
-  location_id: string | null;
-  location_name: string | null;
-  arrival_time: string | null;
-  completion_time: string | null;
-  duration_minutes: number | null;
-  activity_type: 'arrival' | 'completion' | 'general' | string;
-  created_at: string;
-};
-
-type MesaiDaySummary = {
-  date: string; // YYYY-MM-DD (local)
-  completedCount: number;
-  workMinutes: number;
-  travelMinutes: number;
-  totalMinutes: number;
-  normalWorkMinutes: number;
-  overtimeWorkMinutes: number;
-  normalTravelMinutes: number;
-  overtimeTravelMinutes: number;
-  normalMinutes: number;
-  overtimeMinutes: number;
-  firstAt: string | null;
-  lastAt: string | null;
-};
-
-type MesaiUserSummary = {
-  username: string;
-  days: Record<string, MesaiDaySummary>;
-  total: MesaiDaySummary;
-  completions: Array<{
-    date: string;
-    locationName: string;
-    departedAt: string | null;
-    arrivedAt: string | null;
-    completedAt: string | null;
-    travelMinutes: number;
-    workMinutes: number;
-  }>;
-};
-
-const toLocalYmd = (iso: string) => {
-  const d = new Date(iso);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
-
-const toYyyyMm = (d: Date) => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  return `${y}-${m}`;
-};
-
-const normalizeUsername = (name: string | null | undefined) => {
-  const s = String(name || '').trim();
-  return s ? s.toLocaleLowerCase('tr-TR') : '';
-};
-
-const monthBoundsFromYyyyMm = (yyyyMm: string) => {
-  // Guard against empty/invalid values (e.g. browser month input clear button).
-  const fallback = new Date();
-  const [yStr, mStr] = String(yyyyMm || '').split('-');
-  const yearRaw = Number(yStr);
-  const monthRaw = Number(mStr);
-  const year = Number.isFinite(yearRaw) && yearRaw >= 1970 ? yearRaw : fallback.getFullYear();
-  const monthIndex = Number.isFinite(monthRaw) && monthRaw >= 1 && monthRaw <= 12 ? monthRaw - 1 : fallback.getMonth();
-  const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
-  const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
-  return { start, end };
-};
-
-const formatMonthTr = (yyyyMm: string) => {
-  const { start } = monthBoundsFromYyyyMm(yyyyMm);
-  try {
-    return start.toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' });
-  } catch {
-    return yyyyMm;
-  }
-};
-
-const startOfLocalDayIso = (ymd: string) => {
-  const d = new Date(`${ymd}T00:00:00`);
-  return d.toISOString();
-};
-
-const endOfLocalDayIso = (ymd: string) => {
-  const d = new Date(`${ymd}T23:59:59.999`);
-  return d.toISOString();
-};
-
-// Fixed mesai schedule:
-// - Weekdays (Mon-Fri): 09:00-18:00
-// - Saturday: 09:00-14:00
-// - Sunday: no normal hours (everything is overtime)
-const getNormalIntervalsForLocalDate = (d: Date): Array<[number, number]> => {
-  const day = d.getDay();
-  if (day === 0) return []; // Sunday
-  if (day === 6) return [[9 * 60, 14 * 60]]; // Saturday
-  return [[9 * 60, 18 * 60]]; // Mon-Fri
-};
-
-const overlapMinutes = (startMin: number, endMin: number, intervals: Array<[number, number]>): number => {
-  if (endMin <= startMin) return 0;
-  let sum = 0;
-  for (const [a, b] of intervals) {
-    const s = Math.max(startMin, a);
-    const e = Math.min(endMin, b);
-    if (e > s) sum += (e - s);
-  }
-  return Math.max(0, Math.round(sum));
-};
-
-const allocateMinutesBySchedule = (startIso: string, endIso: string) => {
-  const start = new Date(startIso);
-  const end = new Date(endIso);
-  const out = new Map<string, { total: number; normal: number; overtime: number }>();
-  if (!(start instanceof Date) || !(end instanceof Date) || isNaN(start.getTime()) || isNaN(end.getTime())) return out;
-  if (end.getTime() <= start.getTime()) return out;
-
-  let cursor = new Date(start.getTime());
-  while (cursor.getTime() < end.getTime()) {
-    const dayStart = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(), 0, 0, 0, 0);
-    const nextDayStart = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
-
-    const segStart = new Date(Math.max(start.getTime(), dayStart.getTime()));
-    const segEnd = new Date(Math.min(end.getTime(), nextDayStart.getTime()));
-    if (segEnd.getTime() <= segStart.getTime()) {
-      cursor = nextDayStart;
-      continue;
-    }
-
-    const minutes = Math.max(0, Math.round((segEnd.getTime() - segStart.getTime()) / 60000));
-    const startMin = (segStart.getTime() - dayStart.getTime()) / 60000;
-    const endMin = (segEnd.getTime() - dayStart.getTime()) / 60000;
-
-    const intervals = getNormalIntervalsForLocalDate(dayStart);
-    const normal = overlapMinutes(startMin, endMin, intervals);
-    const overtime = Math.max(0, minutes - normal);
-
-    const ymd = toLocalYmd(dayStart.toISOString());
-    const prev = out.get(ymd) || { total: 0, normal: 0, overtime: 0 };
-    out.set(ymd, {
-      total: prev.total + minutes,
-      normal: prev.normal + normal,
-      overtime: prev.overtime + overtime
-    });
-
-    cursor = nextDayStart;
-  }
-
-  return out;
-};
-
-const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUserId, currentUsername, isAdmin = false, regions }) => {
+const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUserId, currentUsername, regions }) => {
   const [teamMembers, setTeamMembers] = useState<TeamMemberStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   useBodyScrollLock(isOpen);
 
   const panelRef = useRef<HTMLDivElement>(null);
-  const teamMembersRef = useRef<TeamMemberStatus[]>([]);
-
-  // Admin mesai report state
-  const [selectedMonth, setSelectedMonth] = useState<string>(() => toYyyyMm(new Date()));
-  const { monthStartYmd, monthEndYmd, monthLabel } = useMemo(() => {
-    const { start, end } = monthBoundsFromYyyyMm(selectedMonth);
-    return {
-      monthStartYmd: toLocalYmd(start.toISOString()),
-      monthEndYmd: toLocalYmd(end.toISOString()),
-      monthLabel: formatMonthTr(selectedMonth)
-    };
-  }, [selectedMonth]);
-
-  const [mesaiOpen, setMesaiOpen] = useState<boolean>(false);
-  const [mesaiStart, setMesaiStart] = useState<string>(monthStartYmd);
-  const [mesaiEnd, setMesaiEnd] = useState<string>(monthEndYmd);
-  const [mesaiLoading, setMesaiLoading] = useState<boolean>(false);
-  const [mesaiError, setMesaiError] = useState<string | null>(null);
-  const [mesaiByUser, setMesaiByUser] = useState<MesaiUserSummary[]>([]);
-  const [mesaiExpanded, setMesaiExpanded] = useState<Record<string, boolean>>({});
-
-  // Month-accurate "Bu ay" totals computed from activities.
-  const [monthTotals, setMonthTotals] = useState<{ completed: number; workMinutes: number; travelMinutes: number } | null>(null);
-  const [monthByUser, setMonthByUser] = useState<Record<string, { completed: number; workMinutes: number; travelMinutes: number }>>({});
-
-  // Mesai report should show only editors (preferred) or at least current team members.
-  // If we can't load roles, fall back to team_status usernames.
-  const [editorUsernames, setEditorUsernames] = useState<string[] | null>(null);
-
-  const allowedUserSet = useMemo(() => {
-    if (editorUsernames) return new Set(editorUsernames);
-    const s = new Set<string>();
-    for (const m of teamMembers) {
-      const k = normalizeUsername(m.username);
-      if (k) s.add(k);
-    }
-    return s;
-  }, [editorUsernames, teamMembers]);
-
-  useEffect(() => {
-    teamMembersRef.current = teamMembers;
-  }, [teamMembers]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (!isAdmin) return;
-
-    const run = async () => {
-      try {
-        const { data, error: fetchError } = await supabase
-          .from('app_users')
-          .select('username, role')
-          .eq('role', 'editor')
-          .limit(1000);
-
-        if (fetchError) {
-          console.warn('editor users fetch error', fetchError);
-          setEditorUsernames(null);
-          return;
-        }
-
-        const list = (data || [])
-          .map((u: any) => normalizeUsername(u.username))
-          .filter(Boolean);
-        setEditorUsernames(list);
-      } catch (e) {
-        console.warn('editor users fetch exception', e);
-        setEditorUsernames(null);
-      }
-    };
-
-    run();
-  }, [isOpen, isAdmin]);
-
-  // Keep Mesai Raporu default range aligned with selected month unless the panel is open
-  useEffect(() => {
-    if (!isOpen) return;
-    if (mesaiOpen) return;
-    setMesaiStart(monthStartYmd);
-    setMesaiEnd(monthEndYmd);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, selectedMonth, monthStartYmd, monthEndYmd]);
 
   const [memberCurrentTask, setMemberCurrentTask] = useState<Record<string, Task | null>>({});
 
@@ -412,457 +169,6 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
       setError('Bir hata oluştu');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const computeMesaiFromActivities = (rows: ActivityRow[], startYmd: string, endYmd: string): MesaiUserSummary[] => {
-    const userMap = new Map<string, MesaiUserSummary>();
-
-    // Build an index of arrival events so we can show travel (yol) per completed location.
-    // Key by normalized username + location_id + arrival timestamp.
-    const arrivalExact = new Map<string, { travelMinutes: number; departedAt: string; arrivedAt: string }>();
-    const arrivalByLoc = new Map<string, Array<{ arrivedAtMs: number; travelMinutes: number; departedAt: string; arrivedAt: string }>>();
-    for (const r of rows) {
-      if (r.activity_type !== 'arrival') continue;
-      const mins = Number(r.duration_minutes || 0);
-      if (!(mins > 0)) continue;
-      const arrivedAt = r.arrival_time || r.created_at;
-      if (!arrivedAt) continue;
-      const uKey = normalizeUsername(r.username);
-      const locKey = String(r.location_id || '');
-      if (!uKey || !locKey) continue;
-      const arrivedAtMs = new Date(arrivedAt).getTime();
-      if (!Number.isFinite(arrivedAtMs)) continue;
-      const departedAt = new Date(arrivedAtMs - mins * 60000).toISOString();
-      const exactKey = `${uKey}|${locKey}|${arrivedAt}`;
-      arrivalExact.set(exactKey, { travelMinutes: mins, departedAt, arrivedAt });
-
-      const bucketKey = `${uKey}|${locKey}`;
-      const list = arrivalByLoc.get(bucketKey) || [];
-      list.push({ arrivedAtMs, travelMinutes: mins, departedAt, arrivedAt });
-      arrivalByLoc.set(bucketKey, list);
-    }
-
-    for (const [k, list] of arrivalByLoc.entries()) {
-      list.sort((a, b) => a.arrivedAtMs - b.arrivedAtMs);
-      arrivalByLoc.set(k, list);
-    }
-    const ensureUser = (username: string) => {
-      const norm = normalizeUsername(username);
-      const key = norm || 'bilinmeyen';
-      let u = userMap.get(key);
-      if (!u) {
-        const emptyTotal: MesaiDaySummary = {
-          date: `${startYmd}..${endYmd}`,
-          completedCount: 0,
-          workMinutes: 0,
-          travelMinutes: 0,
-          totalMinutes: 0,
-          normalWorkMinutes: 0,
-          overtimeWorkMinutes: 0,
-          normalTravelMinutes: 0,
-          overtimeTravelMinutes: 0,
-          normalMinutes: 0,
-          overtimeMinutes: 0,
-          firstAt: null,
-          lastAt: null
-        };
-        // Keep display username, but key by normalized username.
-        u = { username: username || key, days: {}, total: emptyTotal, completions: [] };
-        userMap.set(key, u);
-      }
-      return u;
-    };
-
-    const ensureDay = (u: MesaiUserSummary, date: string) => {
-      let d = u.days[date];
-      if (!d) {
-        d = {
-          date,
-          completedCount: 0,
-          workMinutes: 0,
-          travelMinutes: 0,
-          totalMinutes: 0,
-          normalWorkMinutes: 0,
-          overtimeWorkMinutes: 0,
-          normalTravelMinutes: 0,
-          overtimeTravelMinutes: 0,
-          normalMinutes: 0,
-          overtimeMinutes: 0,
-          firstAt: null,
-          lastAt: null
-        };
-        u.days[date] = d;
-      }
-      return d;
-    };
-
-    const bumpWindow = (d: MesaiDaySummary, iso: string | null) => {
-      if (!iso) return;
-      if (!d.firstAt || new Date(iso).getTime() < new Date(d.firstAt).getTime()) d.firstAt = iso;
-      if (!d.lastAt || new Date(iso).getTime() > new Date(d.lastAt).getTime()) d.lastAt = iso;
-    };
-
-    for (const r of rows) {
-      const u = ensureUser(r.username);
-
-      // Work minutes from completion events (split by mesai schedule)
-      if (r.activity_type === 'completion') {
-        const mins = Number(r.duration_minutes || 0);
-        const endIso = r.completion_time || r.created_at;
-        const end = new Date(endIso);
-
-        // Try to use arrival_time as start; otherwise infer start from end - duration.
-        const startIso = r.arrival_time || (mins > 0 ? new Date(end.getTime() - mins * 60000).toISOString() : endIso);
-
-        const alloc = allocateMinutesBySchedule(startIso, endIso);
-        for (const [ymd, a] of alloc.entries()) {
-          const day = ensureDay(u, ymd);
-          day.workMinutes += a.total;
-          day.normalWorkMinutes += a.normal;
-          day.overtimeWorkMinutes += a.overtime;
-          bumpWindow(day, startIso);
-          bumpWindow(day, endIso);
-        }
-
-        // Completion count should be attributed to completion day.
-        const completionDay = toLocalYmd(endIso);
-        ensureDay(u, completionDay).completedCount += 1;
-
-        // Travel lookup (yola çıkış / varış / yol süresi)
-        const uKey = normalizeUsername(r.username);
-        const locKey = String(r.location_id || '');
-        const arrivedAt = r.arrival_time || null;
-        let travelMinutes = 0;
-        let departedAt: string | null = null;
-        if (uKey && locKey && arrivedAt) {
-          const exactKey = `${uKey}|${locKey}|${arrivedAt}`;
-          const exact = arrivalExact.get(exactKey);
-          if (exact) {
-            travelMinutes = exact.travelMinutes;
-            departedAt = exact.departedAt;
-          } else {
-            // Fallback: match closest arrival within 2 minutes (timestamp precision differences)
-            const bucketKey = `${uKey}|${locKey}`;
-            const list = arrivalByLoc.get(bucketKey) || [];
-            const targetMs = new Date(arrivedAt).getTime();
-            if (Number.isFinite(targetMs) && list.length > 0) {
-              let best: typeof list[number] | null = null;
-              let bestDiff = Infinity;
-              for (const a of list) {
-                const diff = Math.abs(a.arrivedAtMs - targetMs);
-                if (diff < bestDiff) {
-                  bestDiff = diff;
-                  best = a;
-                }
-              }
-              if (best && bestDiff <= 2 * 60 * 1000) {
-                travelMinutes = best.travelMinutes;
-                departedAt = best.departedAt;
-              }
-            }
-          }
-        }
-
-        u.completions.push({
-          date: completionDay,
-          locationName: r.location_name || 'Lokasyon',
-          departedAt,
-          arrivedAt,
-          completedAt: r.completion_time || r.created_at,
-          travelMinutes,
-          workMinutes: mins
-        });
-        continue;
-      }
-
-      // Travel minutes from arrival events (duration_minutes is travel minutes, ending at arrival_time)
-      if (r.activity_type === 'arrival') {
-        const mins = Number(r.duration_minutes || 0);
-        const endIso = r.arrival_time || r.created_at;
-        if (mins > 0 && endIso) {
-          const end = new Date(endIso);
-          const startIso = new Date(end.getTime() - mins * 60000).toISOString();
-          const alloc = allocateMinutesBySchedule(startIso, endIso);
-          for (const [ymd, a] of alloc.entries()) {
-            const day = ensureDay(u, ymd);
-            day.travelMinutes += a.total;
-            day.normalTravelMinutes += a.normal;
-            day.overtimeTravelMinutes += a.overtime;
-            bumpWindow(day, startIso);
-            bumpWindow(day, endIso);
-          }
-          continue;
-        }
-
-        // If we don't have minutes, still update the window for that day.
-        const stamp = r.created_at || r.arrival_time;
-        if (stamp) bumpWindow(ensureDay(u, toLocalYmd(stamp)), stamp);
-        continue;
-      }
-
-      // General events still affect first/last time window
-      const stamp = r.created_at;
-      if (stamp) bumpWindow(ensureDay(u, toLocalYmd(stamp)), stamp);
-    }
-
-    const users = Array.from(userMap.values());
-    // roll up totals per user
-    for (const u of users) {
-      const dayKeys = Object.keys(u.days).sort();
-      let firstAt: string | null = null;
-      let lastAt: string | null = null;
-      let completedCount = 0;
-      let workMinutes = 0;
-      let travelMinutes = 0;
-      let normalMinutes = 0;
-      let overtimeMinutes = 0;
-      let normalWorkMinutes = 0;
-      let overtimeWorkMinutes = 0;
-      let normalTravelMinutes = 0;
-      let overtimeTravelMinutes = 0;
-      for (const k of dayKeys) {
-        const d = u.days[k];
-        d.totalMinutes = (d.workMinutes || 0) + (d.travelMinutes || 0);
-        d.normalMinutes = (d.normalWorkMinutes || 0) + (d.normalTravelMinutes || 0);
-        d.overtimeMinutes = (d.overtimeWorkMinutes || 0) + (d.overtimeTravelMinutes || 0);
-        completedCount += d.completedCount;
-        workMinutes += d.workMinutes;
-        travelMinutes += d.travelMinutes;
-        normalMinutes += d.normalMinutes;
-        overtimeMinutes += d.overtimeMinutes;
-        normalWorkMinutes += d.normalWorkMinutes;
-        overtimeWorkMinutes += d.overtimeWorkMinutes;
-        normalTravelMinutes += d.normalTravelMinutes;
-        overtimeTravelMinutes += d.overtimeTravelMinutes;
-        if (d.firstAt && (!firstAt || new Date(d.firstAt).getTime() < new Date(firstAt).getTime())) firstAt = d.firstAt;
-        if (d.lastAt && (!lastAt || new Date(d.lastAt).getTime() > new Date(lastAt).getTime())) lastAt = d.lastAt;
-      }
-      u.total = {
-        date: `${startYmd}..${endYmd}`,
-        completedCount,
-        workMinutes,
-        travelMinutes,
-        totalMinutes: workMinutes + travelMinutes,
-        normalWorkMinutes,
-        overtimeWorkMinutes,
-        normalTravelMinutes,
-        overtimeTravelMinutes,
-        normalMinutes,
-        overtimeMinutes,
-        firstAt,
-        lastAt
-      };
-      // Sort completions newest first for quick audit
-      u.completions.sort((a, b) => {
-        const at = a.completedAt || a.arrivedAt || a.departedAt || '';
-        const bt = b.completedAt || b.arrivedAt || b.departedAt || '';
-        return new Date(bt).getTime() - new Date(at).getTime();
-      });
-    }
-
-    // Sort users by total minutes desc
-    users.sort((a, b) => (b.total.totalMinutes || 0) - (a.total.totalMinutes || 0));
-    return users;
-  };
-
-  const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, endYmd: string): MesaiUserSummary[] => {
-    const userMap = new Map<string, MesaiUserSummary>();
-
-    const ensureUser = (username: string) => {
-      const norm = normalizeUsername(username);
-      const key = norm || 'bilinmeyen';
-      let u = userMap.get(key);
-      if (!u) {
-        const emptyTotal: MesaiDaySummary = {
-          date: `${startYmd}..${endYmd}`,
-          completedCount: 0,
-          workMinutes: 0,
-          travelMinutes: 0,
-          totalMinutes: 0,
-          normalWorkMinutes: 0,
-          overtimeWorkMinutes: 0,
-          normalTravelMinutes: 0,
-          overtimeTravelMinutes: 0,
-          normalMinutes: 0,
-          overtimeMinutes: 0,
-          firstAt: null,
-          lastAt: null
-        };
-        u = { username: username || key, days: {}, total: emptyTotal, completions: [] };
-        userMap.set(key, u);
-      }
-      return u;
-    };
-
-    const ensureDay = (u: MesaiUserSummary, date: string) => {
-      let d = u.days[date];
-      if (!d) {
-        d = {
-          date,
-          completedCount: 0,
-          workMinutes: 0,
-          travelMinutes: 0,
-          totalMinutes: 0,
-          normalWorkMinutes: 0,
-          overtimeWorkMinutes: 0,
-          normalTravelMinutes: 0,
-          overtimeTravelMinutes: 0,
-          normalMinutes: 0,
-          overtimeMinutes: 0,
-          firstAt: null,
-          lastAt: null
-        };
-        u.days[date] = d;
-      }
-      return d;
-    };
-
-    const bumpWindow = (d: MesaiDaySummary, iso: string | null) => {
-      if (!iso) return;
-      if (!d.firstAt || new Date(iso).getTime() < new Date(d.firstAt).getTime()) d.firstAt = iso;
-      if (!d.lastAt || new Date(iso).getTime() > new Date(d.lastAt).getTime()) d.lastAt = iso;
-    };
-
-    for (const r of rows) {
-      const u = ensureUser(r.username);
-
-      const travelMins = Number(r.travel_minutes || 0);
-      const workMins = Number(r.work_minutes || 0);
-      const departedAt = r.departed_at || (travelMins > 0 ? new Date(new Date(r.arrived_at).getTime() - travelMins * 60000).toISOString() : null);
-      const arrivedAt = r.arrived_at;
-      const completedAt = r.completed_at;
-
-      // Travel allocation (departed -> arrived)
-      if (travelMins > 0 && departedAt && arrivedAt) {
-        const alloc = allocateMinutesBySchedule(departedAt, arrivedAt);
-        for (const [ymd, a] of alloc.entries()) {
-          const day = ensureDay(u, ymd);
-          day.travelMinutes += a.total;
-          day.normalTravelMinutes += a.normal;
-          day.overtimeTravelMinutes += a.overtime;
-          bumpWindow(day, departedAt);
-          bumpWindow(day, arrivedAt);
-        }
-      } else if (arrivedAt) {
-        bumpWindow(ensureDay(u, toLocalYmd(arrivedAt)), arrivedAt);
-      }
-
-      // Work allocation (arrived -> completed)
-      if (workMins > 0 && arrivedAt && completedAt) {
-        const alloc = allocateMinutesBySchedule(arrivedAt, completedAt);
-        for (const [ymd, a] of alloc.entries()) {
-          const day = ensureDay(u, ymd);
-          day.workMinutes += a.total;
-          day.normalWorkMinutes += a.normal;
-          day.overtimeWorkMinutes += a.overtime;
-          bumpWindow(day, arrivedAt);
-          bumpWindow(day, completedAt);
-        }
-      } else if (completedAt) {
-        bumpWindow(ensureDay(u, toLocalYmd(completedAt)), completedAt);
-      }
-
-      // Completion count attributed to completion day.
-      const completionDay = toLocalYmd(completedAt);
-      ensureDay(u, completionDay).completedCount += 1;
-
-      u.completions.push({
-        date: completionDay,
-        locationName: r.location_name || 'Lokasyon',
-        departedAt,
-        arrivedAt,
-        completedAt,
-        travelMinutes: travelMins,
-        workMinutes: workMins
-      });
-    }
-
-    const users = Array.from(userMap.values());
-    for (const u of users) {
-      const dayKeys = Object.keys(u.days).sort();
-      let firstAt: string | null = null;
-      let lastAt: string | null = null;
-      let completedCount = 0;
-      let workMinutes = 0;
-      let travelMinutes = 0;
-      let normalMinutes = 0;
-      let overtimeMinutes = 0;
-      let normalWorkMinutes = 0;
-      let overtimeWorkMinutes = 0;
-      let normalTravelMinutes = 0;
-      let overtimeTravelMinutes = 0;
-      for (const k of dayKeys) {
-        const d = u.days[k];
-        d.totalMinutes = (d.workMinutes || 0) + (d.travelMinutes || 0);
-        d.normalMinutes = (d.normalWorkMinutes || 0) + (d.normalTravelMinutes || 0);
-        d.overtimeMinutes = (d.overtimeWorkMinutes || 0) + (d.overtimeTravelMinutes || 0);
-        completedCount += d.completedCount;
-        workMinutes += d.workMinutes;
-        travelMinutes += d.travelMinutes;
-        normalMinutes += d.normalMinutes;
-        overtimeMinutes += d.overtimeMinutes;
-        normalWorkMinutes += d.normalWorkMinutes;
-        overtimeWorkMinutes += d.overtimeWorkMinutes;
-        normalTravelMinutes += d.normalTravelMinutes;
-        overtimeTravelMinutes += d.overtimeTravelMinutes;
-        if (d.firstAt && (!firstAt || new Date(d.firstAt).getTime() < new Date(firstAt).getTime())) firstAt = d.firstAt;
-        if (d.lastAt && (!lastAt || new Date(d.lastAt).getTime() > new Date(lastAt).getTime())) lastAt = d.lastAt;
-      }
-      u.total = {
-        date: `${startYmd}..${endYmd}`,
-        completedCount,
-        workMinutes,
-        travelMinutes,
-        totalMinutes: workMinutes + travelMinutes,
-        normalWorkMinutes,
-        overtimeWorkMinutes,
-        normalTravelMinutes,
-        overtimeTravelMinutes,
-        normalMinutes,
-        overtimeMinutes,
-        firstAt,
-        lastAt
-      };
-      u.completions.sort((a, b) => {
-        const at = a.completedAt || a.arrivedAt || a.departedAt || '';
-        const bt = b.completedAt || b.arrivedAt || b.departedAt || '';
-        return new Date(bt).getTime() - new Date(at).getTime();
-      });
-    }
-
-    users.sort((a, b) => (b.total.totalMinutes || 0) - (a.total.totalMinutes || 0));
-    return users;
-  };
-
-  const fetchMesaiReport = async () => {
-    if (!isAdmin) return;
-    try {
-      setMesaiLoading(true);
-      setMesaiError(null);
-
-      const startIso = startOfLocalDayIso(mesaiStart);
-      const endIso = endOfLocalDayIso(mesaiEnd);
-
-      const res = await listWorkEntries({ startIso, endIso, limit: 5000 });
-      if (!res.ok) {
-        setMesaiError('Mesai tablosu bulunamadı veya erişilemedi (work_entries). Supabase migration çalıştırılmalı.');
-        setMesaiByUser([]);
-        return;
-      }
-
-      const filtered = res.rows.filter((r) => {
-        const k = normalizeUsername(r.username);
-        return k && allowedUserSet.has(k);
-      });
-
-      setMesaiByUser(computeMesaiFromWorkEntries(filtered, mesaiStart, mesaiEnd));
-    } catch (e) {
-      console.warn('Mesai report exception', e);
-      setMesaiError('Mesai raporu yüklenemedi');
-      setMesaiByUser([]);
-    } finally {
-      setMesaiLoading(false);
     }
   };
 
@@ -988,82 +294,6 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
     
     return () => clearInterval(interval);
   }, [isOpen]);
-
-  // Fetch activities for the selected month to compute accurate totals.
-  useEffect(() => {
-    if (!isOpen) return;
-    const run = async () => {
-      try {
-        // Reset to a safe baseline so UI doesn't show stale totals while switching months.
-        setMonthTotals({ completed: 0, workMinutes: 0, travelMinutes: 0 });
-        setMonthByUser({});
-        const startIso = startOfLocalDayIso(monthStartYmd);
-        const endIso = endOfLocalDayIso(monthEndYmd);
-        const { data, error: fetchError } = await supabase
-          .from('activities')
-          .select('*')
-          .gte('created_at', startIso)
-          .lte('created_at', endIso)
-          .order('created_at', { ascending: false })
-          .limit(5000);
-        if (fetchError) {
-          console.warn('monthTotals fetch error', fetchError);
-          // Keep baseline zeros.
-          return;
-        }
-        const rows: ActivityRow[] = (data || []).map((r: any) => ({
-          id: String(r.id),
-          username: r.username,
-          action: r.action,
-          location_id: r.location_id,
-          location_name: r.location_name,
-          arrival_time: r.arrival_time,
-          completion_time: r.completion_time,
-          duration_minutes: r.duration_minutes,
-          activity_type: r.activity_type,
-          created_at: r.created_at
-        }));
-
-        const filtered = rows.filter((r) => {
-          const k = normalizeUsername(r.username);
-          return k && allowedUserSet.has(k);
-        });
-
-        const byUser = computeMesaiFromActivities(filtered, monthStartYmd, monthEndYmd);
-        const completed = byUser.reduce((s, u) => s + (u.total.completedCount || 0), 0);
-        const workMinutes = byUser.reduce((s, u) => s + (u.total.workMinutes || 0), 0);
-        const travelMinutes = byUser.reduce((s, u) => s + (u.total.travelMinutes || 0), 0);
-        setMonthTotals({ completed, workMinutes, travelMinutes });
-
-        const map: Record<string, { completed: number; workMinutes: number; travelMinutes: number }> = {};
-        for (const u of byUser) {
-          const k = normalizeUsername(u.username);
-          if (!k) continue;
-          map[k] = {
-            completed: u.total.completedCount || 0,
-            workMinutes: u.total.workMinutes || 0,
-            travelMinutes: u.total.travelMinutes || 0
-          };
-        }
-
-        // Ensure every visible member has an explicit override (0s) so cards never fall back to
-        // team_status lifetime counters when looking at a month.
-        for (const m of teamMembersRef.current) {
-          const k = normalizeUsername(m.username);
-          if (!k) continue;
-          if (!map[k]) map[k] = { completed: 0, workMinutes: 0, travelMinutes: 0 };
-        }
-        setMonthByUser(map);
-      } catch (e) {
-        console.warn('monthTotals exception', e);
-        setMonthTotals({ completed: 0, workMinutes: 0, travelMinutes: 0 });
-        setMonthByUser({});
-      }
-    };
-    run();
-    // Refresh on open; realtime updates are optional here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, selectedMonth, monthStartYmd, monthEndYmd, allowedUserSet]);
 
   // Close on click outside
   useEffect(() => {
@@ -1202,9 +432,7 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
 
   const activeMembers = teamMembers.filter(m => m.status !== 'idle');
   const idleMembers = teamMembers.filter(m => m.status === 'idle');
-  const totalTodayCompleted = monthTotals?.completed ?? 0;
-  const totalTravelMins = monthTotals?.travelMinutes ?? 0;
-  const totalWorkMins = monthTotals?.workMinutes ?? 0;
+  const totalTodayCompleted = teamMembers.reduce((sum, m) => sum + (m.today_completed_count || 0), 0);
   const totalInRoute = teamMembers.reduce((sum, m) => sum + (m.total_route_count || 0), 0);
 
   return (
@@ -1221,7 +449,7 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
             </div>
             <div>
               <h2 className="font-bold text-lg sm:text-xl">Saha Ekibi Takip</h2>
-              <p className="text-xs sm:text-sm text-white/80">{teamMembers.length} ekip üyesi • {monthLabel}</p>
+              <p className="text-xs sm:text-sm text-white/80">{teamMembers.length} ekip üyesi</p>
             </div>
           </div>
           
@@ -1236,28 +464,9 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
               <div className="text-2xl font-bold">{totalTodayCompleted}</div>
               <div className="text-xs text-white/70">Tamamlanan</div>
             </div>
-            <div className="w-px h-10 bg-white/20"></div>
-            <div className="text-center">
-              <div className="text-2xl font-bold">{formatMinutes(totalTravelMins)}</div>
-              <div className="text-xs text-white/70">Yolda</div>
-            </div>
-            <div className="w-px h-10 bg-white/20"></div>
-            <div className="text-center">
-              <div className="text-2xl font-bold">{formatMinutes(totalWorkMins)}</div>
-              <div className="text-xs text-white/70">Çalışma</div>
-            </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="hidden sm:flex items-center gap-2 mr-1">
-              <div className="text-xs text-white/70">Ay</div>
-              <input
-                type="month"
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value || toYyyyMm(new Date()))}
-                className="h-9 px-2 rounded-lg bg-white/10 text-white text-sm border border-white/10 focus:outline-none focus:ring-2 focus:ring-white/20"
-              />
-            </div>
             <button
               onClick={fetchTeamStatus}
               className="p-2 hover:bg-white/20 rounded-lg transition-colors"
@@ -1275,7 +484,7 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
         </div>
 
         {/* Summary Stats Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-4 p-3 sm:p-4 bg-gray-50 border-b border-gray-200">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-4 p-3 sm:p-4 bg-gray-50 border-b border-gray-200">
           <div className="flex items-center gap-2 bg-white rounded-lg p-2 shadow-sm">
             <div className="p-1.5 bg-green-100 rounded-lg">
               <Activity className="w-4 h-4 text-green-600" />
@@ -1292,24 +501,6 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
             <div>
               <div className="text-xs text-gray-500">Tamamlanan</div>
               <div className="text-sm font-bold text-gray-800">{totalTodayCompleted} yer</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 bg-white rounded-lg p-2 shadow-sm">
-            <div className="p-1.5 bg-orange-100 rounded-lg">
-              <Car className="w-4 h-4 text-orange-600" />
-            </div>
-            <div>
-              <div className="text-xs text-gray-500">Toplam Yol</div>
-              <div className="text-sm font-bold text-gray-800">{formatMinutes(totalTravelMins)}</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 bg-white rounded-lg p-2 shadow-sm">
-            <div className="p-1.5 bg-gray-200 rounded-lg">
-              <Briefcase className="w-4 h-4 text-gray-700" />
-            </div>
-            <div>
-              <div className="text-xs text-gray-500">Toplam Çalışma</div>
-              <div className="text-sm font-bold text-gray-800">{formatMinutes(totalWorkMins)}</div>
             </div>
           </div>
           <div className="flex items-center gap-2 bg-white rounded-lg p-2 shadow-sm col-span-2 sm:col-span-1">
@@ -1347,250 +538,6 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
             </div>
           ) : (
             <div className="space-y-6">
-              {/* Admin Mesai Raporu */}
-              {isAdmin && (
-                <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !mesaiOpen;
-                      setMesaiOpen(next);
-                      if (next) {
-                        // Ensure inputs are sane, then fetch.
-                        const start = mesaiStart || monthStartYmd;
-                        const end = mesaiEnd || start;
-                        setMesaiStart(start);
-                        setMesaiEnd(end);
-                        fetchMesaiReport();
-                      }
-                    }}
-                    className="w-full flex items-center justify-between px-4 py-3 bg-gray-900 text-white"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Timer className="w-5 h-5" />
-                      <div className="text-sm font-semibold">Mesai Raporu</div>
-                      <div className="text-xs text-white/70">(hangi gün ne yapmış / toplam mesai)</div>
-                    </div>
-                    {mesaiOpen ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                  </button>
-
-                  {mesaiOpen && (
-                    <div className="p-4 space-y-4">
-                      <div className="flex flex-col lg:flex-row lg:items-end gap-3">
-                        <div className="flex items-center gap-2">
-                          <div>
-                            <div className="text-xs text-gray-500">Başlangıç</div>
-                            <input
-                              type="date"
-                              value={mesaiStart}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setMesaiStart(v);
-                                if (mesaiEnd && v > mesaiEnd) setMesaiEnd(v);
-                              }}
-                              className="mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                            />
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500">Bitiş</div>
-                            <input
-                              type="date"
-                              value={mesaiEnd}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setMesaiEnd(v);
-                                if (mesaiStart && v < mesaiStart) setMesaiStart(v);
-                              }}
-                              className="mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={fetchMesaiReport}
-                            className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-800"
-                            disabled={mesaiLoading}
-                          >
-                            {mesaiLoading ? 'Yükleniyor…' : 'Raporu Getir'}
-                          </button>
-                          <button
-                            onClick={() => {
-                              setMesaiStart(monthStartYmd);
-                              setMesaiEnd(monthEndYmd);
-                              setTimeout(() => fetchMesaiReport(), 0);
-                            }}
-                            className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
-                          >
-                            Seçili ay
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="text-xs text-gray-500">
-                        Mesai kuralı: Hafta içi 09:00–18:00, Cumartesi 09:00–14:00, Pazar normal mesai yok (tamamı ek mesai).
-                        <span className="ml-2">Not: "Yol" süreleri yeni kayıtlarda otomatik loglanır; eski kayıtlarda 0 görünebilir.</span>
-                      </div>
-
-                      {mesaiError && (
-                        <div className="text-sm text-red-600">{mesaiError}</div>
-                      )}
-
-                      {!mesaiError && !mesaiLoading && mesaiByUser.length === 0 && (
-                        <div className="text-sm text-gray-500">Bu tarih aralığında kayıt bulunamadı.</div>
-                      )}
-
-                      {!mesaiError && mesaiByUser.length > 0 && (
-                        <>
-                          {/* Global summary */}
-                          {(() => {
-                            const sumCompleted = mesaiByUser.reduce((s, u) => s + (u.total.completedCount || 0), 0);
-                            const sumWork = mesaiByUser.reduce((s, u) => s + (u.total.workMinutes || 0), 0);
-                            const sumTravel = mesaiByUser.reduce((s, u) => s + (u.total.travelMinutes || 0), 0);
-                            const sumNormal = mesaiByUser.reduce((s, u) => s + (u.total.normalMinutes || 0), 0);
-                            const sumOver = mesaiByUser.reduce((s, u) => s + (u.total.overtimeMinutes || 0), 0);
-                            return (
-                              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                                  <div className="text-xs text-gray-500">Tamamlanan</div>
-                                  <div className="text-sm font-bold text-gray-900">{sumCompleted}</div>
-                                </div>
-                                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                                  <div className="text-xs text-gray-500">Çalışma</div>
-                                  <div className="text-sm font-bold text-gray-900">{formatMinutes(sumWork)}</div>
-                                </div>
-                                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                                  <div className="text-xs text-gray-500">Yol</div>
-                                  <div className="text-sm font-bold text-gray-900">{formatMinutes(sumTravel)}</div>
-                                </div>
-                                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                                  <div className="text-xs text-gray-500">Normal mesai</div>
-                                  <div className="text-sm font-bold text-gray-900">{formatMinutes(sumNormal)}</div>
-                                </div>
-                                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                                  <div className="text-xs text-gray-500">Ek mesai</div>
-                                  <div className="text-sm font-bold text-gray-900">{formatMinutes(sumOver)}</div>
-                                </div>
-                              </div>
-                            );
-                          })()}
-
-                          <div className="space-y-2">
-                            {mesaiByUser.map((u) => {
-                              const expanded = !!mesaiExpanded[u.username];
-                              const overtimeMinutes = u.total.overtimeMinutes || 0;
-                              const dayKeys = Object.keys(u.days).sort().reverse();
-                              return (
-                                <div key={u.username} className="border border-gray-200 rounded-lg overflow-hidden">
-                                  <button
-                                    type="button"
-                                    onClick={() => setMesaiExpanded((prev) => ({ ...prev, [u.username]: !expanded }))}
-                                    className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-gray-50"
-                                  >
-                                    <div className="flex items-center gap-3">
-                                      <div className="w-9 h-9 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-bold">
-                                        {String(u.username).slice(0, 1).toUpperCase()}
-                                      </div>
-                                      <div className="text-left">
-                                        <div className="text-sm font-semibold text-gray-900">{u.username}</div>
-                                        <div className="text-xs text-gray-500">
-                                          {u.total.firstAt ? formatTime(u.total.firstAt) : '--:--'} - {u.total.lastAt ? formatTime(u.total.lastAt) : '--:--'} • {u.total.completedCount} tamamlanan
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-4">
-                                      <div className="text-right">
-                                        <div className="text-sm font-bold text-gray-900">Toplam: {formatMinutes(u.total.totalMinutes)}</div>
-                                        <div className="text-xs text-gray-500">Normal: {formatMinutes(u.total.normalMinutes)} • Ek: {formatMinutes(overtimeMinutes)}</div>
-                                      </div>
-                                      {expanded ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
-                                    </div>
-                                  </button>
-
-                                  {expanded && (
-                                    <div className="px-4 pb-4 space-y-3">
-                                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3">
-                                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
-                                          <div className="text-[11px] text-gray-500">Çalışma</div>
-                                          <div className="text-sm font-bold text-gray-900">{formatMinutes(u.total.workMinutes)}</div>
-                                        </div>
-                                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
-                                          <div className="text-[11px] text-gray-500">Yol</div>
-                                          <div className="text-sm font-bold text-gray-900">{formatMinutes(u.total.travelMinutes)}</div>
-                                        </div>
-                                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
-                                          <div className="text-[11px] text-gray-500">Normal mesai</div>
-                                          <div className="text-sm font-bold text-gray-900">{formatMinutes(u.total.normalMinutes)}</div>
-                                        </div>
-                                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
-                                          <div className="text-[11px] text-gray-500">Ek mesai</div>
-                                          <div className="text-sm font-bold text-gray-900">{formatMinutes(overtimeMinutes)}</div>
-                                        </div>
-                                      </div>
-
-                                      <div className="border-t border-gray-100 pt-3">
-                                        <div className="text-xs font-semibold text-gray-700 mb-2">Günlük kırılım</div>
-                                        <div className="space-y-1">
-                                          {dayKeys.map((k) => {
-                                            const d = u.days[k];
-                                            const over = d.overtimeMinutes || 0;
-                                            return (
-                                              <div key={k} className="flex items-center justify-between text-sm">
-                                                <div className="text-gray-700">
-                                                  <span className="font-medium">{k}</span>
-                                                  <span className="text-gray-400"> • </span>
-                                                  <span className="text-gray-600">{d.completedCount} tamamlanan</span>
-                                                  <span className="text-gray-400"> • </span>
-                                                  <span className="text-gray-600">Çalışma {formatMinutes(d.workMinutes)} / Yol {formatMinutes(d.travelMinutes)}</span>
-                                                </div>
-                                                <div className="text-right">
-                                                  <div className="font-semibold text-gray-900">{formatMinutes(d.totalMinutes)}</div>
-                                                  <div className="text-xs text-gray-500">Normal: {formatMinutes(d.normalMinutes)} • Ek: {formatMinutes(over)}</div>
-                                                </div>
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                      </div>
-
-                                      <div className="border-t border-gray-100 pt-3">
-                                        <div className="text-xs font-semibold text-gray-700 mb-2">Tamamlanan işler</div>
-                                        <div className="max-h-52 overflow-y-auto pr-1 space-y-1">
-                                          {u.completions.slice(0, 200).map((c, idx) => (
-                                            <div key={`${c.date}-${c.locationName}-${idx}`} className="flex items-center justify-between text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                                              <div className="min-w-0">
-                                                <div className="text-gray-900 font-medium truncate">{c.locationName}</div>
-                                                <div className="text-xs text-gray-500 truncate">
-                                                  {c.date}
-                                                  <span className="text-gray-400"> • </span>
-                                                  <span>Çıkış {c.departedAt ? formatTime(c.departedAt) : '--:--'}</span>
-                                                  <span className="text-gray-400"> • </span>
-                                                  <span>Varış {c.arrivedAt ? formatTime(c.arrivedAt) : '--:--'}</span>
-                                                  <span className="text-gray-400"> • </span>
-                                                  <span>Bitiş {c.completedAt ? formatTime(c.completedAt) : '--:--'}</span>
-                                                </div>
-                                              </div>
-                                              <div className="text-right shrink-0 pl-3">
-                                                <div className="text-gray-900 font-semibold">İş {formatMinutes(c.workMinutes)}</div>
-                                                <div className="text-xs text-gray-500">Yol {formatMinutes(c.travelMinutes || 0)}</div>
-                                              </div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* Active Members Section */}
               {activeMembers.length > 0 && (
                 <div>
@@ -1609,7 +556,6 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
                         currentTask={memberCurrentTask[member.user_id] ?? null}
                         onAssignTask={currentUserId ? () => openAssignTaskModal(member) : undefined}
                         onOpenTaskDetails={() => openTaskDetails(member)}
-                        todayOverride={monthByUser[normalizeUsername(member.username)] ?? { completed: 0, workMinutes: 0, travelMinutes: 0 }}
                       />
                     ))}
                   </div>
@@ -1634,7 +580,6 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
                         currentTask={memberCurrentTask[member.user_id] ?? null}
                         onAssignTask={currentUserId ? () => openAssignTaskModal(member) : undefined}
                         onOpenTaskDetails={() => openTaskDetails(member)}
-                        todayOverride={monthByUser[normalizeUsername(member.username)] ?? { completed: 0, workMinutes: 0, travelMinutes: 0 }}
                       />
                     ))}
                   </div>
@@ -1871,18 +816,15 @@ interface TeamMemberCardProps {
   currentTask?: Task | null;
   onAssignTask?: () => void;
   onOpenTaskDetails?: () => void;
-  todayOverride?: { completed: number; workMinutes: number; travelMinutes: number } | null;
 }
 
-const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ member, onFocus, currentTask, onAssignTask, onOpenTaskDetails, todayOverride = null }) => {
+const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ member, onFocus, currentTask, onAssignTask, onOpenTaskDetails }) => {
   const [showCompletedList, setShowCompletedList] = useState(false);
   const statusInfo = statusLabels[member.status] || statusLabels.idle;
   const isActive = member.status !== 'idle';
   const completedLocations = member.completed_locations || [];
 
-  const todayCompleted = todayOverride?.completed ?? (member.today_completed_count || 0);
-  const todayTravel = todayOverride?.travelMinutes ?? (member.total_travel_minutes || 0);
-  const todayWork = todayOverride?.workMinutes ?? (member.total_work_minutes || 0);
+  const todayCompleted = member.today_completed_count || 0;
   
   const handleFocusClick = () => {
     if (onFocus && member.current_lat && member.current_lng) {
@@ -1929,19 +871,11 @@ const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ member, onFocus, curren
           </div>
         </div>
 
-        {/* Today's Stats Summary */}
-        <div className="grid grid-cols-3 gap-2 mb-3">
+        {/* Today's Summary */}
+        <div className="grid grid-cols-1 gap-2 mb-3">
           <div className="text-center bg-green-50 rounded-lg py-2">
             <div className="text-lg font-bold text-green-600">{todayCompleted}</div>
             <div className="text-[10px] text-green-700 font-medium">Tamamlanan</div>
-          </div>
-          <div className="text-center bg-orange-50 rounded-lg py-2">
-            <div className="text-lg font-bold text-orange-600">{formatMinutes(todayTravel)}</div>
-            <div className="text-[10px] text-orange-700 font-medium">Yol Süresi</div>
-          </div>
-          <div className="text-center bg-gray-100 rounded-lg py-2">
-            <div className="text-lg font-bold text-gray-900">{formatMinutes(todayWork)}</div>
-            <div className="text-[10px] text-gray-700 font-medium">Çalışma</div>
           </div>
         </div>
 

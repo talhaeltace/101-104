@@ -26,6 +26,10 @@
 	<string>MapFlow uygulaması, saha teknisyenlerinin ziyaret etmesi gereken transformatör merkezlerini haritada göstermek ve en yakın lokasyona yol tarifi sağlamak için konumunuzu kullanır. Örneğin: Haritada bulunduğunuz noktadan hedef lokasyona rota oluşturulur ve Google Maps ile yol tarifi alabilirsiniz.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>MapFlow uygulaması, saha ziyaretleri sırasında hangi transformatör merkezlerine ulaştığınızı otomatik olarak kaydetmek için arka planda konum takibi yapar. Bu sayede ziyaret ettiğiniz lokasyonlar sistem tarafından işaretlenir ve raporlanabilir. Örneğin: Bir TM lokasyonuna 100 metre yaklaştığınızda uygulama bunu algılar ve ziyaret kaydı oluşturur.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

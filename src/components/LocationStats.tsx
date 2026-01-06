@@ -15,18 +15,22 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       return sum + weight;
     }, 0);
 
+  const countKgLocations = (locs: Location[], predicate: (loc: Location) => boolean) =>
+    locs.reduce((sum, loc) => (predicate(loc) ? sum + 1 : sum), 0);
+
   // Tüm bölgeler için istatistikler
   const activeCount = locations.filter(loc => loc.details.isActive).length;
   const configuredCount = locations.filter(loc => loc.details.isConfigured).length;
   const installedCount = locations.filter(loc => !!loc.details.isInstalled).length;
-  const cardAccessCount = sumKg(locations, loc => !!loc.details.hasCardAccess);
+  // NOTE: Total card access should be per-location (2-door should NOT increase total).
+  const cardAccessCount = countKgLocations(locations, loc => !!loc.details.hasCardAccess);
   const acceptedCount = locations.filter(loc => !!loc.details.isAccepted).length;
   
   // Seçili bölge için istatistikler
   const selectedActiveCount = selectedRegionLocations.filter(loc => loc.details.isActive).length;
   const selectedConfiguredCount = selectedRegionLocations.filter(loc => loc.details.isConfigured).length;
   const selectedInstalledCount = selectedRegionLocations.filter(loc => !!loc.details.isInstalled).length;
-  const selectedCardAccessCount = sumKg(selectedRegionLocations, loc => !!loc.details.hasCardAccess);
+  const selectedCardAccessCount = countKgLocations(selectedRegionLocations, loc => !!loc.details.hasCardAccess);
   const selectedAcceptedCount = selectedRegionLocations.filter(loc => !!loc.details.isAccepted).length;
 
   const stats = [

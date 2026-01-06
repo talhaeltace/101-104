@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
+import type { BackgroundGeolocationPlugin } from '@capacitor-community/background-geolocation';
 import { blobToBase64, saveAndShareFile, saveArrayBufferAndShare } from './lib/nativeFiles';
 import { Location } from './data/regions';
 import { useLocations } from './hooks/useLocations';
@@ -26,15 +27,20 @@ import { logWorkEntry } from './lib/workEntries';
 import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted, notifyRouteStarted, notifyPermissionsUpdated, notifyAcceptanceRequest } from './lib/notifications';
 import type { AuthUser } from './lib/authUser';
 import { DEFAULT_PERMISSIONS } from './lib/userPermissions';
-import { supabase } from './lib/supabase';
-import { createAcceptanceRequest } from './lib/acceptanceRequests';
+import { supabase, supabaseUrl, supabaseAnonKey } from './lib/supabase';
+import { createAcceptanceRequest, listPendingAcceptanceRequests } from './lib/acceptanceRequests';
 import LoginPage from './pages/LoginPage';
 import TeamPanel from './components/TeamPanel';
 import AdminPanel from './components/AdminPanel';
+import AdminAcceptanceRequestsFullscreen from './components/AdminAcceptanceRequestsFullscreen';
+import AdminAssignedTasksFullscreen from './components/AdminAssignedTasksFullscreen';
+import MesaiTrackingPanel from './components/MesaiTrackingPanel';
 import { updateTeamStatus, clearTeamStatus, getUserRoute, CompletedLocationInfo, calculateMinutesBetween } from './lib/teamStatus';
 import { saveTrackingState, loadTrackingState, clearTrackingState, type RouteTrackingStorage } from './lib/trackingStorage';
 import { updateTaskStatus, type Task } from './lib/tasks';
 import { Routes, Route, Navigate } from 'react-router-dom';
+
+const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
 
 function App() {
   const [selectedRegion, setSelectedRegion] = useState(0);
@@ -53,6 +59,10 @@ function App() {
 
   // Admin Panel state
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
+  const [isMesaiTrackingOpen, setIsMesaiTrackingOpen] = useState(false);
+  const [isAcceptanceApprovalsOpen, setIsAcceptanceApprovalsOpen] = useState(false);
+  const [isAssignedTasksAdminOpen, setIsAssignedTasksAdminOpen] = useState(false);
+  const [pendingAcceptanceCount, setPendingAcceptanceCount] = useState<number>(0);
 
   const { locations, loading, error, updateLocation, createLocation, deleteLocation } = useLocations();
   const [isCreateMode, setIsCreateMode] = useState(false);
@@ -134,6 +144,67 @@ function App() {
   // User's current location for distance calculation
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [geoPermissionDenied, setGeoPermissionDenied] = useState<boolean>(false);
+
+  // Reduce perceived "reload/reset" by throttling GPS -> React state updates.
+  // We still store the latest coordinate in a ref for background writes and other logic.
+  const latestUserLocationRef = useRef<[number, number] | null>(null);
+  const lastUiUserLocationRef = useRef<[number, number] | null>(null);
+  const lastUiUserLocationUpdateAtRef = useRef<number>(0);
+
+  const pushUserLocation = useCallback((lat: number, lng: number, opts?: { force?: boolean }) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+    const next: [number, number] = [lat, lng];
+    latestUserLocationRef.current = next;
+
+    const now = Date.now();
+    const force = !!opts?.force;
+
+    // Update UI at most ~1/sec unless forced.
+    if (!force && now - (lastUiUserLocationUpdateAtRef.current || 0) < 900) return;
+
+    const prev = lastUiUserLocationRef.current;
+    if (!force && prev && prev[0] === next[0] && prev[1] === next[1]) return;
+
+    lastUiUserLocationUpdateAtRef.current = now;
+    lastUiUserLocationRef.current = next;
+    setUserLocation(next);
+  }, []);
+
+  // Persist lightweight UI state so if Android reloads the WebView, it doesn't feel like a fresh login.
+  const UI_STATE_KEY = 'ui_state_v1';
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(UI_STATE_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (s && typeof s.selectedRegion === 'number') setSelectedRegion(s.selectedRegion);
+      if (s && (s.view === 'map' || s.view === 'list')) setView(s.view);
+      if (s && (s.mapMode === 'lokasyon' || s.mapMode === 'harita')) setMapMode(s.mapMode);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      try {
+        localStorage.setItem(
+          UI_STATE_KEY,
+          JSON.stringify({
+            selectedRegion,
+            view,
+            mapMode,
+            savedAt: new Date().toISOString()
+          })
+        );
+      } catch {
+        // ignore
+      }
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [mapMode, selectedRegion, view]);
 
   // Initial work state for restoring from localStorage
   const [initialWorkState, setInitialWorkState] = useState<{ isWorking: boolean; workStartTime: Date | null } | undefined>(undefined);
@@ -456,7 +527,7 @@ function App() {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           setGeoPermissionDenied(false);
-          setUserLocation([position.coords.latitude, position.coords.longitude]);
+          pushUserLocation(position.coords.latitude, position.coords.longitude, { force: true });
         },
         (err: any) => {
           // Permission denied: avoid retry loops that keep prompting
@@ -498,7 +569,7 @@ function App() {
             if (isMounted) {
               setGeoPermissionDenied(false);
               const newLocation: [number, number] = [position.coords.latitude, position.coords.longitude];
-              setUserLocation(newLocation);
+              pushUserLocation(newLocation[0], newLocation[1]);
             }
           },
           (err: any) => {
@@ -529,7 +600,7 @@ function App() {
             (position) => {
               if (!isMounted) return;
               setGeoPermissionDenied(false);
-              setUserLocation([position.coords.latitude, position.coords.longitude]);
+              pushUserLocation(position.coords.latitude, position.coords.longitude);
             },
             (err: any) => {
               if (isNativePlatform && err && err.code === 1) {
@@ -563,7 +634,131 @@ function App() {
       }
       if (intervalId) clearInterval(intervalId);
     };
-  }, [activeRoute, geoPermissionDenied]);
+  }, [activeRoute, geoPermissionDenied, pushUserLocation]);
+
+  // Background live location (native only): while a route is active, keep receiving GPS updates even if the app is backgrounded.
+  // - Uses @capacitor-community/background-geolocation (Android persistent notification)
+  // - Writes to `team_status` via native HTTP to avoid WebView background throttling.
+  const bgWatcherIdRef = useRef<string | null>(null);
+  const lastBgWriteAtRef = useRef<number>(0);
+  const lastBgCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
+  const isWorkingRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    isWorkingRef.current = !!trackingState.isWorking;
+  }, [trackingState.isWorking]);
+
+  useEffect(() => {
+    const platform = Capacitor.getPlatform();
+    const isNativePlatform = platform !== 'web';
+
+    if (!isNativePlatform) return;
+    if (!currentUser?.id || !currentUser?.username) return;
+
+    const hasActiveRoute = !!(activeRoute && activeRoute.length > 0);
+    if (!hasActiveRoute) return;
+
+    let cancelled = false;
+
+    const upsertTeamStatusNative = async (lat: number, lng: number, status: string) => {
+      try {
+        const nowIso = new Date().toISOString();
+        const url = `${supabaseUrl}/rest/v1/team_status?on_conflict=user_id`;
+
+        // Upsert into team_status using native HTTP stack.
+        // NOTE: This project uses anon key (no Supabase Auth), so DB permissions are currently open.
+        await CapacitorHttp.request({
+          method: 'POST',
+          url,
+          headers: {
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${supabaseAnonKey}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates,return=minimal'
+          },
+          data: [
+            {
+              user_id: currentUser.id,
+              username: currentUser.username,
+              status,
+              current_lat: lat,
+              current_lng: lng,
+              last_updated_at: nowIso
+            }
+          ]
+        });
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn('[bg geo] team_status upsert failed', e);
+      }
+    };
+
+    const start = async () => {
+      try {
+        if (bgWatcherIdRef.current) return;
+
+        const id = await BackgroundGeolocation.addWatcher(
+          {
+            // Enable background mode (Android persistent notification)
+            backgroundTitle: 'MapFlow',
+            backgroundMessage: 'Canlı Harita aktif: konum paylaşılıyor',
+            requestPermissions: true,
+            stale: false,
+            // Smaller distance filter for smoother tracking.
+            distanceFilter: 5
+          },
+          async (location, error) => {
+            if (cancelled) return;
+
+            if (error) {
+              if (import.meta.env.DEV) console.warn('[bg geo] error', error);
+              return;
+            }
+
+            if (!location) return;
+            const lat = Number((location as any).latitude);
+            const lng = Number((location as any).longitude);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+            // Keep UI state updated (foreground or background resume)
+            pushUserLocation(lat, lng);
+
+            // Throttle server writes to reduce battery and avoid rate limits.
+            const now = Date.now();
+            if (now - (lastBgWriteAtRef.current || 0) < 5000) return;
+
+            const prev = lastBgCoordsRef.current;
+            if (prev && prev.lat === lat && prev.lng === lng) return;
+            lastBgCoordsRef.current = { lat, lng };
+            lastBgWriteAtRef.current = now;
+
+            const derivedStatus = isWorkingRef.current ? 'adreste' : 'yolda';
+            await upsertTeamStatusNative(lat, lng, derivedStatus);
+          }
+        );
+
+        bgWatcherIdRef.current = String(id);
+        if (import.meta.env.DEV) console.debug('[bg geo] watcher started', { id });
+      } catch (e) {
+        console.warn('Failed to start background geolocation', e);
+      }
+    };
+
+    start();
+
+    return () => {
+      cancelled = true;
+      const id = bgWatcherIdRef.current;
+      bgWatcherIdRef.current = null;
+      if (!id) return;
+      try {
+        BackgroundGeolocation.removeWatcher({ id });
+        if (import.meta.env.DEV) console.debug('[bg geo] watcher stopped', { id });
+      } catch {
+        // ignore
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRoute, currentUser?.id, currentUser?.username, pushUserLocation]);
 
   // load activities from supabase on mount (admins will see them)
   useEffect(() => {
@@ -652,28 +847,66 @@ function App() {
 
   const showMobileHeader = forceMobileHeader || isNarrow;
 
-  // Admin: listen for new acceptance requests and show a notification
+  const refreshPendingAcceptanceCount = useCallback(async () => {
+    if (!currentUser || userRole !== 'admin') {
+      setPendingAcceptanceCount(0);
+      return 0;
+    }
+
+    try {
+      const list = await listPendingAcceptanceRequests();
+      const next = Array.isArray(list) ? list.length : 0;
+      setPendingAcceptanceCount(next);
+      if (import.meta.env.DEV) console.debug('[acceptance badge] refreshed', { count: next });
+      return next;
+    } catch (e) {
+      console.warn('refreshPendingAcceptanceCount failed', e);
+      setPendingAcceptanceCount(0);
+      return 0;
+    }
+  }, [currentUser, userRole]);
+
+  // Admin: keep a badge count for pending acceptance requests and show notifications on new requests.
   useEffect(() => {
-    if (!currentUser || userRole !== 'admin') return;
+    if (!currentUser || userRole !== 'admin') {
+      setPendingAcceptanceCount(0);
+      return;
+    }
+
+    let cancelled = false;
+
+    refreshPendingAcceptanceCount();
 
     const channel = supabase
       .channel('location_acceptance_requests_admin')
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'location_acceptance_requests' },
+        { event: '*', schema: 'public', table: 'location_acceptance_requests' },
         (payload: any) => {
-          const row = payload?.new;
-          if (!row) return;
-          if (String(row.status || 'pending') !== 'pending') return;
-          notifyAcceptanceRequest(String(row.location_name || 'Lokasyon'), String(row.requested_by_username || 'Editör'));
+          try {
+            const eventType = String(payload?.eventType || '').toUpperCase();
+            if (import.meta.env.DEV) console.debug('[acceptance badge] realtime', { eventType, payload });
+            if (eventType === 'INSERT') {
+              const row = payload?.new;
+              if (row && String(row.status || 'pending') === 'pending') {
+                notifyAcceptanceRequest(String(row.location_name || 'Lokasyon'), String(row.requested_by_username || 'Editör'));
+              }
+            }
+          } catch (e) {
+            console.warn('acceptance realtime handler error', e);
+          }
+
+          // Always refresh count; it's fast and keeps badge correct.
+          if (!cancelled) refreshPendingAcceptanceCount();
         }
       )
       .subscribe();
 
     return () => {
+      cancelled = true;
       try { supabase.removeChannel(channel); } catch { /* ignore */ }
     };
-  }, [currentUser, userRole]);
+  }, [currentUser, refreshPendingAcceptanceCount, userRole]);
 
   // Prevent hash anchors (e.g. Leaflet controls) from jumping scroll to top.
   // Also: preserve the main scroll container position across clicks, since some third-party
@@ -1001,38 +1234,69 @@ function App() {
   // deployedCount and selectedDeployedCount removed (not used currently)
 
   // Export helpers
+  const yn = (v: boolean | undefined | null) => (v ? 'Evet' : 'Hayır');
+  const fmtNum = (v: unknown) => {
+    if (v == null) return '';
+    const n = Number(v);
+    return Number.isFinite(n) ? String(n) : String(v);
+  };
+
+  const locationToExportRow = (loc: Location, region?: { id: number; name: string } | null) => {
+    const eq = loc.details?.equipment;
+    return {
+      'Bölge Adı': region?.name ?? '',
+      'İsim': loc.name,
+      'Merkez': loc.center,
+
+      'Marka': loc.brand,
+      'Model': loc.model,
+      'Etiketler': loc.details?.tags ?? '',
+
+      'GPS Var': yn(loc.details?.hasGPS),
+      'RTU Var': yn(loc.details?.hasRTU),
+      'Pano Var': yn(loc.details?.hasPanos),
+
+      'Devreye Alınmış': yn(loc.details?.isActive),
+      'Konfigüre': yn(loc.details?.isConfigured),
+      'Kabul Yapıldı': yn(loc.details?.isAccepted),
+      'Montaj Yapıldı': yn(loc.details?.isInstalled),
+
+      'Kartlı Geçiş': yn(loc.details?.hasCardAccess),
+      'Kartlı Geçiş Devrede': yn(loc.details?.isActiveCardAccess),
+      'Kartlı Geçiş Montaj': yn(loc.details?.isInstalledCardAccess),
+      '2 Kapılı Kartlı Geçiş': yn(loc.details?.isTwoDoorCardAccess),
+
+      'Transformatör Tipi': eq?.transformerCenterType ?? '',
+      'Güvenlik Duvarı': fmtNum(eq?.securityFirewall),
+      'Network Switch': fmtNum(eq?.networkSwitch),
+      'RTU Sayısı': fmtNum(eq?.rtuCount),
+      'GPS Kart/Anten': fmtNum(eq?.gpsCardAntenna),
+      'RTU Panosu': fmtNum(eq?.rtuPanel),
+      'BTP Panosu': fmtNum(eq?.btpPanel),
+      'Enerji Analizörü': fmtNum(eq?.energyAnalyzer),
+      'YKGC': fmtNum(eq?.ykgcCount),
+      'TEİAŞ RTU Kurulum': fmtNum(eq?.teiasRtuInstallation),
+      'İç Ortam Dome Kamera': fmtNum(eq?.indoorDomeCamera),
+      'Ağ Video Yönetim': fmtNum(eq?.networkVideoManagement),
+      'Akıllı Kontrol Ünitesi': fmtNum(eq?.smartControlUnit),
+      'Kart Okuyucu': fmtNum(eq?.cardReader),
+      'Ağ Kayıt Ünitesi': fmtNum(eq?.networkRecordingUnit),
+      'Geçiş Kontrol Yazılımı': fmtNum(eq?.accessControlSystem)
+    };
+  };
+
   const handleExportExcel = () => {
     const wb = XLSX.utils.book_new();
 
     if (selectedRegion === 0) {
       locations.forEach(region => {
-        const rows = region.locations.map(loc => ({
-          İsim: loc.name,
-          Merkez: loc.center,
-          Marka: loc.brand,
-          Model: loc.model,
-          'Devreye Alinmis': loc.details.isActive ? 'Evet' : 'Hayır',
-          Konfigüre: loc.details.isConfigured ? 'Evet' : 'Hayır',
-          'Montaji Yapildi': loc.details.isInstalled ? 'Evet' : 'Hayır',
-          'Kartlı Gecis': loc.details.hasCardAccess ? 'Evet' : 'Hayır',
-          'Transformatör Tipi': loc.details.equipment.transformerCenterType
-        }));
+        const rows = region.locations.map(loc => locationToExportRow(loc, { id: region.id, name: region.name }));
         const sheetName = `${region.id}. Bölge`;
         const ws = XLSX.utils.json_to_sheet(rows);
         XLSX.utils.book_append_sheet(wb, ws, sheetName.substring(0, 31));
       });
     } else {
-      const rows = currentLocations.map(loc => ({
-        İsim: loc.name,
-        Merkez: loc.center,
-        Marka: loc.brand,
-        Model: loc.model,
-        'Devreye Alinmis': loc.details.isActive ? 'Evet' : 'Hayır',
-        Konfigüre: loc.details.isConfigured ? 'Evet' : 'Hayır',
-        'Montaji Yapildi': loc.details.isInstalled ? 'Evet' : 'Hayır',
-        'Kartlı Gecis': loc.details.hasCardAccess ? 'Evet' : 'Hayır',
-        'Transformatör Tipi': loc.details.equipment.transformerCenterType
-      }));
+      const rows = currentLocations.map(loc => locationToExportRow(loc, currentRegion ? { id: currentRegion.id, name: currentRegion.name } : null));
       const ws = XLSX.utils.json_to_sheet(rows);
       XLSX.utils.book_append_sheet(wb, ws, currentRegion ? `${currentRegion.id}. Bölge`.substring(0,31) : 'Lokasyonlar');
     }
@@ -1072,6 +1336,25 @@ function App() {
     } catch (e) {
       console.warn('Could not load DejaVuSans.ttf, falling back to default font', e);
       return null;
+    }
+  };
+
+  const tryLoadPdfFont = async (doc: any) => {
+    // Prefer an internet-hosted TTF (per request), but always keep a local fallback.
+    // Inter has full Turkish glyph support.
+    const remoteInterTtf = 'https://raw.githubusercontent.com/google/fonts/main/ofl/inter/static/Inter-Regular.ttf';
+    try {
+      const res = await fetch(remoteInterTtf);
+      if (!res.ok) throw new Error('Remote font not reachable');
+      const buf = await res.arrayBuffer();
+      const base64 = arrayBufferToBase64(buf);
+      const vfsKey = 'Inter-Regular.ttf';
+      doc.addFileToVFS(vfsKey, base64);
+      doc.addFont(vfsKey, 'Inter', 'normal');
+      return 'Inter';
+    } catch (e) {
+      console.warn('Could not load remote Inter font, falling back to bundled DejaVuSans.ttf', e);
+      return await tryLoadFont(doc, '/fonts/DejaVuSans.ttf');
     }
   };
 
@@ -1258,14 +1541,19 @@ function App() {
     notifyCompletion(currentTargetLocation.name, result.duration);
     
     // Log completion to database
-    await logCompletion(
-      currentUser.username,
-      currentTargetLocation.id,
-      currentTargetLocation.name,
-      result.startTime,
-      endTime,
-      result.duration
-    );
+    try {
+      await logCompletion(
+        currentUser.username,
+        currentTargetLocation.id,
+        currentTargetLocation.name,
+        result.startTime,
+        endTime,
+        result.duration
+      );
+    } catch (e) {
+      // Activity logs are non-critical; never block completion flow.
+      console.warn('activities insert failed (logCompletion)', e);
+    }
 
     // Mesai source-of-truth: write a dedicated work entry (travel + work)
     try {
@@ -1275,7 +1563,7 @@ function App() {
           ? new Date(result.startTime.getTime() - travelMinutesForThisLeg * 60000).toISOString()
           : null);
 
-      await logWorkEntry({
+      const ok = await logWorkEntry({
         userId: String(currentUser.id),
         username: currentUser.username,
         locationId: String(currentTargetLocation.id),
@@ -1286,8 +1574,12 @@ function App() {
         travelMinutes: travelMinutesForThisLeg,
         workMinutes: workMinutes
       });
-    } catch {
-      // ignore
+
+      if (!ok) {
+        console.warn('work_entries insert failed (logWorkEntry returned false)');
+      }
+    } catch (e) {
+      console.warn('work_entries insert exception', e);
     }
 
     // Editor completion -> request admin acceptance approval for this location.
@@ -1450,75 +1742,144 @@ function App() {
   // to prevent any state resets or logout triggers when switching tabs or backgrounding the app.
 
   const handleExportPDF = async () => {
-  const doc: any = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'landscape' });
-  const columns = ['Isim', 'Merkez', 'Marka', 'Model', 'Devreye Alinmis', 'Konfigüre', 'Montaji Yapildi', 'Kartli Gecis', 'Transformatör Tipi'];
+  // A4 portrait with vertical layout (one location as key/value rows) so everything fits on printouts.
+  const doc: any = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
 
     try {
-      const loadedFont = await tryLoadFont(doc);
+      // Prefer internet font, fallback to bundled font
+      const loadedFont = await tryLoadPdfFont(doc);
       if (loadedFont) {
         doc.setFont(loadedFont, 'normal');
       }
 
-      const pageMargins = { left: 40, right: 40, top: 40, bottom: 40 };
+      const pageMargins = { left: 28, right: 28, top: 36, bottom: 32 };
 
       const innerPageWidth = doc.internal.pageSize.getWidth() - pageMargins.left - pageMargins.right;
 
+      // 2-column key/value layout (Alan/Değer | Alan/Değer) so a full location fits on one A4 page.
+      const keyColWidth = 120;
+      const valueColWidth = Math.max(140, Math.floor((innerPageWidth - 2 * keyColWidth) / 2));
+
       const commonAutoTableOpts: any = {
-        // place table a bit lower so header title sits above it
-        startY: pageMargins.top + 6,
+        startY: pageMargins.top + 24,
         margin: { left: pageMargins.left, right: pageMargins.right },
         tableWidth: innerPageWidth,
         headStyles: {
           fillColor: [43, 108, 176],
           textColor: 255,
-          fontStyle: 'bold',
+          // Use normal to avoid missing-bold fallback font issues
+          fontStyle: 'normal',
+          font: loadedFont || undefined,
           halign: 'top',
           valign: 'top',
           overflow: 'linebreak',
-          fontSize: 10
+          fontSize: 11
         },
         styles: {
           font: loadedFont || undefined,
-          fontSize: 8,
-          cellPadding: 6,
+          fontSize: 9,
+          cellPadding: 4,
           overflow: 'linebreak',
           valign: 'left'
         },
         alternateRowStyles: { fillColor: [245, 245, 245] },
-        // Adjusted column widths for 9 columns in landscape
         columnStyles: {
-          0: { cellWidth: 150 }, // İsim
-          1: { cellWidth: 110 }, // Merkez
-          2: { cellWidth: 90 },  // Marka
-          3: { cellWidth: 80 },  // Model
-          4: { cellWidth: 50 },  // Devreye Alınmış
-          5: { cellWidth: 60 },  // Konfigüre
-          6: { cellWidth: 60 },  // Montajı Yapıldı
-          7: { cellWidth: 60 },  // Kartlı Geçiş
-          8: { cellWidth: 140 }  // Transformatör Tipi
+          0: { cellWidth: keyColWidth },
+          1: { cellWidth: valueColWidth },
+          2: { cellWidth: keyColWidth },
+          3: { cellWidth: valueColWidth }
         },
         tableLineWidth: 0,
         tableLineColor: 200
       };
 
-      const addHeaderAndFooter = (title: string) => {
+      const headerTitle = selectedRegion === 0 ? 'Tüm Bölgeler' : `${currentRegion?.id}. Bölge`;
+
+      const addHeaderAndFooter = () => {
         return (_data: any) => {
-          doc.setFontSize(16);
+          const pageWidth = doc.internal.pageSize.getWidth();
+
+          // Header: only title centered at top
+          doc.setFontSize(14);
           if (loadedFont) doc.setFont(loadedFont, 'normal');
           doc.setTextColor(30);
-          doc.text('Lokasyonlar Dışa Aktarımı', pageMargins.left, 30);
+          doc.text(headerTitle, pageWidth / 2, 24, { align: 'center' });
 
-          doc.setFontSize(12);
-          if (loadedFont) doc.setFont(loadedFont, 'normal');
-          doc.text(title, pageMargins.left, 15);
-
+          // Footer
           const pageNumber = doc.internal.getCurrentPageInfo ? doc.internal.getCurrentPageInfo().pageNumber : doc.internal.getCurrentPageInfo?.().pageNumber;
           const totalPages = doc.internal.getNumberOfPages ? doc.internal.getNumberOfPages() : undefined;
           doc.setFontSize(9);
           const footerText = totalPages ? `Sayfa ${pageNumber} / ${totalPages}` : `Sayfa ${pageNumber}`;
           doc.setTextColor(120);
-          doc.text(footerText, doc.internal.pageSize.getWidth() - pageMargins.right, doc.internal.pageSize.getHeight() - 20, { align: 'right' });
+          doc.text(footerText, pageWidth - pageMargins.right, doc.internal.pageSize.getHeight() - 20, { align: 'right' });
         };
+      };
+
+      const columnsKv = [
+        { header: 'Alan', dataKey: 'k1' },
+        { header: 'Değer', dataKey: 'v1' },
+        { header: 'Alan', dataKey: 'k2' },
+        { header: 'Değer', dataKey: 'v2' }
+      ];
+
+      const pairsForLocation = (loc: Location, region: { id: number; name: string } | null) => {
+        const row = locationToExportRow(loc, region);
+        const entries = Object.entries(row);
+        return entries.map(([k, v]) => ({ k, v: v == null ? '' : String(v) }));
+      };
+
+      const renderRegion = (region: { id: number; name: string } | null, list: Location[]) => {
+        // We intentionally do not render a separate "region intro" table.
+
+        for (let idx = 0; idx < list.length; idx++) {
+          const loc = list[idx];
+          if (idx > 0) doc.addPage();
+
+          const flat = [
+            { k: 'Lokasyon', v: `${idx + 1}/${list.length} - ${loc.name}` },
+            ...pairsForLocation(loc, region)
+          ];
+
+          const body: Array<{ k1: string; v1: string; k2: string; v2: string }> = [];
+          for (let i = 0; i < flat.length; i += 2) {
+            const a = flat[i];
+            const b = flat[i + 1];
+            body.push({
+              k1: a?.k ?? '',
+              v1: a?.v ?? '',
+              k2: b?.k ?? '',
+              v2: b?.v ?? ''
+            });
+          }
+
+          // Make the table fill the page height (single page per location).
+          // We compute a minimum row height based on available vertical space.
+          const pageHeight = doc.internal.pageSize.getHeight();
+          const footerReserve = 18; // keep clear of footer text
+          const availableHeight = Math.max(
+            0,
+            pageHeight - pageMargins.bottom - footerReserve - commonAutoTableOpts.startY
+          );
+          const rowCount = Math.max(1, body.length);
+          // Include header row in the distribution.
+          const targetRowHeight = Math.round(availableHeight / (rowCount + 1));
+          // Allow more vertical fill when there are fewer rows.
+          const minRowHeight = Math.max(12, Math.min(44, targetRowHeight));
+
+          autoTable(doc as any, {
+            ...commonAutoTableOpts,
+            columns: columnsKv,
+            body,
+            didDrawPage: addHeaderAndFooter(),
+            startY: commonAutoTableOpts.startY,
+            didParseCell: (data: any) => {
+              // Force a minimum row height to reduce empty space.
+              if (data?.cell?.styles) {
+                data.cell.styles.minCellHeight = Math.max(data.cell.styles.minCellHeight || 0, minRowHeight);
+              }
+            }
+          });
+        }
       };
 
       if (selectedRegion === 0) {
@@ -1526,47 +1887,10 @@ function App() {
           const region = locations[i];
           if (!region.locations || region.locations.length === 0) continue;
           if (i > 0) doc.addPage();
-
-          const regionTitle = `${region.id}. Bölge`;
-          const rows = region.locations.map(loc => [
-            loc.name,
-            loc.center,
-            loc.brand,
-            loc.model,
-            loc.details.isActive ? 'Evet' : 'Hayır',
-            loc.details.isConfigured ? 'Evet' : 'Hayır',
-            loc.details.isInstalled ? 'Evet' : 'Hayır',
-            loc.details.hasCardAccess ? 'Evet' : 'Hayır',
-            loc.details.equipment.transformerCenterType
-          ]);
-
-          autoTable(doc as any, {
-            head: [columns],
-            body: rows,
-            didDrawPage: addHeaderAndFooter(regionTitle),
-            ...commonAutoTableOpts
-          });
+          renderRegion({ id: region.id, name: region.name }, region.locations);
         }
       } else {
-        const regionTitle = `${currentRegion?.id}. Bölge`;
-        const rows = currentLocations.map(loc => [
-          loc.name,
-          loc.center,
-          loc.brand,
-          loc.model,
-          loc.details.isActive ? 'Evet' : 'Hayır',
-          loc.details.isConfigured ? 'Evet' : 'Hayır',
-          loc.details.isInstalled ? 'Evet' : 'Hayır',
-          loc.details.hasCardAccess ? 'Evet' : 'Hayır',
-          loc.details.equipment.transformerCenterType
-        ]);
-
-        autoTable(doc as any, {
-          head: [columns],
-          body: rows,
-          didDrawPage: addHeaderAndFooter(regionTitle),
-          ...commonAutoTableOpts
-        });
+        renderRegion(currentRegion ? { id: currentRegion.id, name: currentRegion.name } : null, currentLocations);
       }
 
       const regionLabel = selectedRegion === 0 ? 'tum_bolgeler' : (currentRegion?.name ?? String(selectedRegion));
@@ -1941,6 +2265,38 @@ function App() {
                         {userRole === 'admin' && (
                           <button
                             type="button"
+                            onClick={() => setIsMesaiTrackingOpen(true)}
+                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Mesai Takip
+                          </button>
+                        )}
+                        {userRole === 'admin' && (
+                          <button
+                            type="button"
+                            onClick={() => setIsAcceptanceApprovalsOpen(true)}
+                            className="relative w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Kabul Onayları
+                            {pendingAcceptanceCount > 0 && (
+                              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                                {pendingAcceptanceCount > 99 ? '99+' : pendingAcceptanceCount}
+                              </span>
+                            )}
+                          </button>
+                        )}
+                        {userRole === 'admin' && (
+                          <button
+                            type="button"
+                            onClick={() => setIsAssignedTasksAdminOpen(true)}
+                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Atanan Görevler
+                          </button>
+                        )}
+                        {userRole === 'admin' && (
+                          <button
+                            type="button"
                             onClick={() => setIsAdminPanelOpen(true)}
                             className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-red-200 bg-red-50 text-red-800 hover:bg-red-100 transition-colors"
                           >
@@ -2296,7 +2652,42 @@ function App() {
                           </button>
                         )}
 
+                        {userRole === 'admin' && (
+                          <button
+                            type="button"
+                            onClick={() => { setIsMesaiTrackingOpen(true); setDrawerOpen(false); }}
+                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Mesai Takip
+                          </button>
+                        )}
+
                         {/* Admin Panel Button - Admin only (mobile drawer) */}
+                        {userRole === 'admin' && (
+                          <button
+                            type="button"
+                            onClick={() => { setIsAcceptanceApprovalsOpen(true); setDrawerOpen(false); }}
+                            className="relative w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Kabul Onayları
+                            {pendingAcceptanceCount > 0 && (
+                              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                                {pendingAcceptanceCount > 99 ? '99+' : pendingAcceptanceCount}
+                              </span>
+                            )}
+                          </button>
+                        )}
+
+                        {userRole === 'admin' && (
+                          <button
+                            type="button"
+                            onClick={() => { setIsAssignedTasksAdminOpen(true); setDrawerOpen(false); }}
+                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Atanan Görevler
+                          </button>
+                        )}
+
                         {userRole === 'admin' && (
                           <button
                             type="button"
@@ -2565,7 +2956,6 @@ function App() {
                 onClose={() => setIsTeamPanelOpen(false)}
                 currentUserId={currentUser?.id ?? null}
                 currentUsername={currentUser?.username ?? null}
-                isAdmin={userRole === 'admin'}
                 regions={locations}
                 onFocusMember={canViewLiveMap ? ((memberId: string, username: string, lat: number, lng: number) => {
                   setFollowMember({ id: memberId, username, lat, lng });
@@ -2574,6 +2964,13 @@ function App() {
                   setIsLiveMapOpen(true);
                 }) : undefined}
               />
+
+              {userRole === 'admin' && (
+                <MesaiTrackingPanel
+                  isOpen={isMesaiTrackingOpen}
+                  onClose={() => setIsMesaiTrackingOpen(false)}
+                />
+              )}
 
               {/* Fullscreen Live Map Overlay */}
               {isLiveMapOpen && canViewLiveMap && (
@@ -2626,6 +3023,27 @@ function App() {
                   onArrivalConfirm={handleArrivalConfirm}
                   onCompletionConfirm={handleCompletionConfirm}
                   onCancelRoute={handleCancelRoute}
+                />
+              )}
+
+              {/* Admin: Acceptance approvals (fullscreen) */}
+              {userRole === 'admin' && isAcceptanceApprovalsOpen && currentUser && (
+                <AdminAcceptanceRequestsFullscreen
+                  currentUserId={currentUser.id}
+                  currentUsername={currentUser.username}
+                  onPendingCountChanged={(count) => {
+                    setPendingAcceptanceCount(count);
+                    if (import.meta.env.DEV) console.debug('[acceptance badge] pushed from fullscreen', { count });
+                  }}
+                  onClose={() => setIsAcceptanceApprovalsOpen(false)}
+                />
+              )}
+
+              {/* Admin: Assigned tasks created by this admin (fullscreen) */}
+              {userRole === 'admin' && isAssignedTasksAdminOpen && currentUser && (
+                <AdminAssignedTasksFullscreen
+                  currentUserId={currentUser.id}
+                  onClose={() => setIsAssignedTasksAdminOpen(false)}
                 />
               )}
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const sourceIcon = path.join(__dirname, '../ios/App/App/Assets.xcassets/AppIcon.appiconset/512.png');
+const sourceIcon = path.join(__dirname, '../public/MapFlow_icon.png');
 const outputDir = path.join(__dirname, '../ios/App/App/Assets.xcassets/AppIcon.appiconset');
 
 // All required iOS icon sizes
@@ -17,16 +17,33 @@ const sizes = [
 
 async function generateIcons() {
   console.log('Reading source icon:', sourceIcon);
+
+  const meta = await sharp(sourceIcon).metadata();
+  const width = meta.width || 0;
+  const height = meta.height || 0;
+  const side = Math.max(width, height, 1024);
+  const padLeft = Math.floor((side - width) / 2);
+  const padRight = Math.ceil((side - width) / 2);
+  const padTop = Math.floor((side - height) / 2);
+  const padBottom = Math.ceil((side - height) / 2);
+
+  const squaredBase = sharp(sourceIcon)
+    .extend({
+      top: padTop,
+      bottom: padBottom,
+      left: padLeft,
+      right: padRight,
+      background: { r: 255, g: 255, b: 255, alpha: 1 }
+    })
+    .resize(1024, 1024, { fit: 'fill' });
   
   for (const size of sizes) {
     const outputPath = path.join(outputDir, `${size}.png`);
     try {
-      await sharp(sourceIcon)
-        .resize(size, size, {
-          fit: 'cover',
-          position: 'center'
-        })
-        .flatten({ background: { r: 255, g: 255, b: 255 } }) // Remove alpha, add white background
+      await squaredBase
+        .clone()
+        .resize(size, size, { fit: 'fill' })
+        .flatten({ background: { r: 255, g: 255, b: 255 } })
         .png()
         .toFile(outputPath);
       console.log(`✓ Generated ${size}x${size} icon`);

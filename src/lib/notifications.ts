@@ -30,9 +30,9 @@ export const sendNotification = (title: string, options?: NotificationOptions): 
   }
 
   try {
-    const notification = new Notification(title, {
-      icon: '/icon.png',
-      badge: '/icon.png',
+      const notification = new Notification(title, {
+        icon: '/pwa-192.png',
+        badge: '/pwa-192.png',
       requireInteraction: true,
       ...options
     });

@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Search, MapPin, Cpu, ChevronDown, ChevronUp } from 'lucide-react';
+import { Search, MapPin, Cpu, ChevronDown, ChevronUp, DoorClosed } from 'lucide-react';
 import { Location, Region } from '../data/regions';
 import { fieldsMatchQuery } from '../lib/search';
 
@@ -214,6 +214,16 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
                 >
                   {/* Status indicator dot - top right */}
                   <div className={`absolute top-3 right-3 w-3 h-3 rounded-full ${status.dotClass} ring-2 ring-white`} />
+
+                  {/* Card access door indicator (under the status dot) */}
+                  {location.details.hasCardAccess ? (
+                    <div className="absolute top-6 right-2 flex items-center gap-0.5 rounded-md bg-white/90 px-1 py-0.5">
+                      <DoorClosed className="w-3.5 h-3.5 text-gray-600" />
+                      {location.details.isTwoDoorCardAccess ? (
+                        <DoorClosed className="w-3.5 h-3.5 text-gray-600" />
+                      ) : null}
+                    </div>
+                  ) : null}
                   
                   {/* Location name */}
                   <div className="flex items-start gap-2 mb-3 pr-4">
@@ -346,6 +356,16 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               >
                 {/* Status indicator dot - top right */}
                 <div className={`absolute top-3 right-3 w-3 h-3 rounded-full ${status.dotClass} ring-2 ring-white`} />
+
+                {/* Card access door indicator (under the status dot) */}
+                {location.details.hasCardAccess ? (
+                  <div className="absolute top-6 right-2 flex items-center gap-0.5 rounded-md bg-white/90 px-1 py-0.5">
+                    <DoorClosed className="w-3.5 h-3.5 text-gray-600" />
+                    {location.details.isTwoDoorCardAccess ? (
+                      <DoorClosed className="w-3.5 h-3.5 text-gray-600" />
+                    ) : null}
+                  </div>
+                ) : null}
                 
                 {/* Location name */}
                 <div className="flex items-start gap-2 mb-3 pr-4">

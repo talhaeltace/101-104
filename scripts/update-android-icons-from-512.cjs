@@ -7,8 +7,17 @@ const sharp = require('sharp');
 const path = require('path');
 const fs = require('fs');
 
-// Source file
-const sourceFile = path.join(__dirname, '../public/Assets.xcassets/AppIcon.appiconset/512.png');
+// Source file (prefer the Play Store icon in repo root)
+const sourceCandidates = [
+  path.join(__dirname, '../public/MapFlow_icon.png'),
+  path.join(__dirname, '../google-play-icon-512.png'),
+  path.join(__dirname, '../512x512-icon.png'),
+  path.join(__dirname, '../public/icon.png'),
+  path.join(__dirname, '../resources/icon.png'),
+  path.join(__dirname, '../public/nelitlogo.png'),
+];
+
+const sourceFile = sourceCandidates.find(p => fs.existsSync(p));
 
 // Android mipmap directories and their sizes
 const androidSizes = [
@@ -34,17 +43,19 @@ async function generateIcons() {
   console.log('🎨 Starting Android icon generation from 512.png...\n');
 
   // Check if source file exists
-  if (!fs.existsSync(sourceFile)) {
-    console.error('❌ Source file not found:', sourceFile);
+  if (!sourceFile) {
+    console.error('❌ Source file not found. Tried:', sourceCandidates.join(', '));
     process.exit(1);
   }
+
+  console.log('✅ Using source:', sourceFile);
 
   // Generate standard launcher icons
   console.log('📱 Generating ic_launcher.png files...');
   for (const { folder, size } of androidSizes) {
     const outputPath = path.join(androidResDir, folder, 'ic_launcher.png');
     await sharp(sourceFile)
-      .resize(size, size, { fit: 'cover' })
+      .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .png()
       .toFile(outputPath);
     console.log(`  ✅ ${folder}/ic_launcher.png (${size}x${size})`);
@@ -62,7 +73,7 @@ async function generateIcons() {
     </svg>`;
     
     await sharp(sourceFile)
-      .resize(size, size, { fit: 'cover' })
+      .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .composite([{
         input: Buffer.from(circleSvg),
         blend: 'dest-in'
@@ -84,7 +95,7 @@ async function generateIcons() {
     
     // Create transparent background and place icon in center
     await sharp(sourceFile)
-      .resize(iconSize, iconSize, { fit: 'cover' })
+      .resize(iconSize, iconSize, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .extend({
         top: padding,
         bottom: padding,
@@ -98,22 +109,7 @@ async function generateIcons() {
     console.log(`  ✅ ${folder}/ic_launcher_foreground.png (${size}x${size})`);
   }
 
-  // Also update public/android icons for web manifest
-  console.log('\n🌐 Updating public/android icons...');
-  const publicAndroidDir = path.join(__dirname, '../public/android');
-  
-  for (const { folder, size } of androidSizes) {
-    const publicFolderPath = path.join(publicAndroidDir, folder);
-    if (fs.existsSync(publicFolderPath)) {
-      // Copy the nelit_icon.png or create one
-      const outputPath = path.join(publicFolderPath, 'nelit_icon.png');
-      await sharp(sourceFile)
-        .resize(size, size, { fit: 'cover' })
-        .png()
-        .toFile(outputPath);
-      console.log(`  ✅ public/android/${folder}/nelit_icon.png (${size}x${size})`);
-    }
-  }
+  // NOTE: Web/PWA icons are generated separately into public/ (favicon.png, pwa-*.png)
 
   console.log('\n✅ All Android icons generated successfully!');
   console.log('\n📌 Next steps:');
