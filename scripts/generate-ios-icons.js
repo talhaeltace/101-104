@@ -18,32 +18,23 @@ const sizes = [
 async function generateIcons() {
   console.log('Reading source icon:', sourceIcon);
 
-  const meta = await sharp(sourceIcon).metadata();
-  const width = meta.width || 0;
-  const height = meta.height || 0;
-  const side = Math.max(width, height, 1024);
-  const padLeft = Math.floor((side - width) / 2);
-  const padRight = Math.ceil((side - width) / 2);
-  const padTop = Math.floor((side - height) / 2);
-  const padBottom = Math.ceil((side - height) / 2);
-
-  const squaredBase = sharp(sourceIcon)
-    .extend({
-      top: padTop,
-      bottom: padBottom,
-      left: padLeft,
-      right: padRight,
+  // Create a deterministic 1024x1024 square base first.
+  // Using fit:'contain' ensures padding is applied BEFORE resizing so the
+  // smaller outputs don't end up with unscaled padding (which breaks actool).
+  const squared1024 = await sharp(sourceIcon)
+    .resize(1024, 1024, {
+      fit: 'contain',
       background: { r: 255, g: 255, b: 255, alpha: 1 }
     })
-    .resize(1024, 1024, { fit: 'fill' });
+    .flatten({ background: { r: 255, g: 255, b: 255 } })
+    .png()
+    .toBuffer();
   
   for (const size of sizes) {
     const outputPath = path.join(outputDir, `${size}.png`);
     try {
-      await squaredBase
-        .clone()
+      await sharp(squared1024)
         .resize(size, size, { fit: 'fill' })
-        .flatten({ background: { r: 255, g: 255, b: 255 } })
         .png()
         .toFile(outputPath);
       console.log(`✓ Generated ${size}x${size} icon`);
