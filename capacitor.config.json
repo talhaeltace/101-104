@@ -2,8 +2,5 @@
   "appId": "com.nelit.project101104",
   "appName": "MapFlow",
   "webDir": "dist",
-  "bundledWebRuntime": false,
-  "android": {
-    "useLegacyBridge": true
-  }
+  "bundledWebRuntime": false
 }

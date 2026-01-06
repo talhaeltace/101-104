@@ -3,9 +3,8 @@ import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
-import type { BackgroundGeolocationPlugin } from '@capacitor-community/background-geolocation';
 import { blobToBase64, saveAndShareFile, saveArrayBufferAndShare } from './lib/nativeFiles';
 import { Location } from './data/regions';
 import { useLocations } from './hooks/useLocations';
@@ -27,7 +26,7 @@ import { logWorkEntry } from './lib/workEntries';
 import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted, notifyRouteStarted, notifyPermissionsUpdated, notifyAcceptanceRequest } from './lib/notifications';
 import type { AuthUser } from './lib/authUser';
 import { DEFAULT_PERMISSIONS } from './lib/userPermissions';
-import { supabase, supabaseUrl, supabaseAnonKey } from './lib/supabase';
+import { supabase } from './lib/supabase';
 import { createAcceptanceRequest, listPendingAcceptanceRequests } from './lib/acceptanceRequests';
 import LoginPage from './pages/LoginPage';
 import TeamPanel from './components/TeamPanel';
@@ -39,8 +38,6 @@ import { updateTeamStatus, clearTeamStatus, getUserRoute, CompletedLocationInfo,
 import { saveTrackingState, loadTrackingState, clearTrackingState, type RouteTrackingStorage } from './lib/trackingStorage';
 import { updateTaskStatus, type Task } from './lib/tasks';
 import { Routes, Route, Navigate } from 'react-router-dom';
-
-const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
 
 function App() {
   const [selectedRegion, setSelectedRegion] = useState(0);
@@ -635,130 +632,6 @@ function App() {
       if (intervalId) clearInterval(intervalId);
     };
   }, [activeRoute, geoPermissionDenied, pushUserLocation]);
-
-  // Background live location (native only): while a route is active, keep receiving GPS updates even if the app is backgrounded.
-  // - Uses @capacitor-community/background-geolocation (Android persistent notification)
-  // - Writes to `team_status` via native HTTP to avoid WebView background throttling.
-  const bgWatcherIdRef = useRef<string | null>(null);
-  const lastBgWriteAtRef = useRef<number>(0);
-  const lastBgCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
-  const isWorkingRef = useRef<boolean>(false);
-
-  useEffect(() => {
-    isWorkingRef.current = !!trackingState.isWorking;
-  }, [trackingState.isWorking]);
-
-  useEffect(() => {
-    const platform = Capacitor.getPlatform();
-    const isNativePlatform = platform !== 'web';
-
-    if (!isNativePlatform) return;
-    if (!currentUser?.id || !currentUser?.username) return;
-
-    const hasActiveRoute = !!(activeRoute && activeRoute.length > 0);
-    if (!hasActiveRoute) return;
-
-    let cancelled = false;
-
-    const upsertTeamStatusNative = async (lat: number, lng: number, status: string) => {
-      try {
-        const nowIso = new Date().toISOString();
-        const url = `${supabaseUrl}/rest/v1/team_status?on_conflict=user_id`;
-
-        // Upsert into team_status using native HTTP stack.
-        // NOTE: This project uses anon key (no Supabase Auth), so DB permissions are currently open.
-        await CapacitorHttp.request({
-          method: 'POST',
-          url,
-          headers: {
-            apikey: supabaseAnonKey,
-            Authorization: `Bearer ${supabaseAnonKey}`,
-            'Content-Type': 'application/json',
-            Prefer: 'resolution=merge-duplicates,return=minimal'
-          },
-          data: [
-            {
-              user_id: currentUser.id,
-              username: currentUser.username,
-              status,
-              current_lat: lat,
-              current_lng: lng,
-              last_updated_at: nowIso
-            }
-          ]
-        });
-      } catch (e) {
-        if (import.meta.env.DEV) console.warn('[bg geo] team_status upsert failed', e);
-      }
-    };
-
-    const start = async () => {
-      try {
-        if (bgWatcherIdRef.current) return;
-
-        const id = await BackgroundGeolocation.addWatcher(
-          {
-            // Enable background mode (Android persistent notification)
-            backgroundTitle: 'MapFlow',
-            backgroundMessage: 'Canlı Harita aktif: konum paylaşılıyor',
-            requestPermissions: true,
-            stale: false,
-            // Smaller distance filter for smoother tracking.
-            distanceFilter: 5
-          },
-          async (location, error) => {
-            if (cancelled) return;
-
-            if (error) {
-              if (import.meta.env.DEV) console.warn('[bg geo] error', error);
-              return;
-            }
-
-            if (!location) return;
-            const lat = Number((location as any).latitude);
-            const lng = Number((location as any).longitude);
-            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-
-            // Keep UI state updated (foreground or background resume)
-            pushUserLocation(lat, lng);
-
-            // Throttle server writes to reduce battery and avoid rate limits.
-            const now = Date.now();
-            if (now - (lastBgWriteAtRef.current || 0) < 5000) return;
-
-            const prev = lastBgCoordsRef.current;
-            if (prev && prev.lat === lat && prev.lng === lng) return;
-            lastBgCoordsRef.current = { lat, lng };
-            lastBgWriteAtRef.current = now;
-
-            const derivedStatus = isWorkingRef.current ? 'adreste' : 'yolda';
-            await upsertTeamStatusNative(lat, lng, derivedStatus);
-          }
-        );
-
-        bgWatcherIdRef.current = String(id);
-        if (import.meta.env.DEV) console.debug('[bg geo] watcher started', { id });
-      } catch (e) {
-        console.warn('Failed to start background geolocation', e);
-      }
-    };
-
-    start();
-
-    return () => {
-      cancelled = true;
-      const id = bgWatcherIdRef.current;
-      bgWatcherIdRef.current = null;
-      if (!id) return;
-      try {
-        BackgroundGeolocation.removeWatcher({ id });
-        if (import.meta.env.DEV) console.debug('[bg geo] watcher stopped', { id });
-      } catch {
-        // ignore
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRoute, currentUser?.id, currentUser?.username, pushUserLocation]);
 
   // load activities from supabase on mount (admins will see them)
   useEffect(() => {
