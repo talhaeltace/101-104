@@ -226,6 +226,15 @@ function App() {
   const userCanExport = typeof currentUser?.can_export === 'boolean' ? currentUser.can_export : roleDefaults.can_export;
   const userCanRoute = typeof currentUser?.can_route === 'boolean' ? currentUser.can_route : roleDefaults.can_route;
   const userCanTeamView = typeof currentUser?.can_team_view === 'boolean' ? currentUser.can_team_view : roleDefaults.can_team_view;
+  const userCanManualGps = typeof (currentUser as any)?.can_manual_gps === 'boolean' ? (currentUser as any).can_manual_gps : (roleDefaults as any).can_manual_gps;
+
+  // Manual GPS mode (permission-gated). When enabled, we stop using live GPS for proximity
+  // and show the arrival swipe immediately.
+  const [manualGpsMode, setManualGpsMode] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!userCanManualGps && manualGpsMode) setManualGpsMode(false);
+  }, [userCanManualGps, manualGpsMode]);
 
   const currentTargetLocation = useMemo(() => {
     if (!activeRoute || activeRoute.length === 0) return null;
@@ -243,7 +252,7 @@ function App() {
 
   const { trackingState, confirmArrival, completeWork, resetTracking } = useLocationTracking({
     targetLocation: currentTargetLocation,
-    userPosition: userLocation,
+    userPosition: manualGpsMode ? null : userLocation,
     initialWorkState,
     testMode: isRouteTestMode
   });
@@ -875,7 +884,7 @@ function App() {
       try {
         const { data, error } = await supabase
           .from('app_users')
-          .select('id, username, role, full_name, email, can_view, can_edit, can_create, can_delete, can_export, can_route, can_team_view')
+          .select('id, username, role, full_name, email, can_view, can_edit, can_create, can_delete, can_export, can_route, can_team_view, can_manual_gps')
           .eq('id', currentUser.id)
           .maybeSingle();
 
@@ -891,7 +900,8 @@ function App() {
           data.can_delete !== currentUser.can_delete ||
           data.can_export !== currentUser.can_export ||
           data.can_route !== currentUser.can_route ||
-          data.can_team_view !== currentUser.can_team_view;
+          data.can_team_view !== currentUser.can_team_view ||
+          (data as any).can_manual_gps !== (currentUser as any).can_manual_gps;
 
         if (!changed) return;
 
@@ -907,7 +917,8 @@ function App() {
           can_delete: data.can_delete,
           can_export: data.can_export,
           can_route: data.can_route,
-          can_team_view: data.can_team_view
+          can_team_view: data.can_team_view,
+          can_manual_gps: (data as any).can_manual_gps
         };
 
         // Normalize role and update both state and localStorage session
@@ -946,7 +957,7 @@ function App() {
 
   // Mobile drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted'>('all');
+  const [statusFilters, setStatusFilters] = useState<Array<'active' | 'configured' | 'started' | 'installed' | 'installed_only' | 'accepted' | 'untouched' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'rtu' | 'rtu_installed' | 'rtu_todo'>>([]);
 
   // Team panel state
   const [isTeamPanelOpen, setIsTeamPanelOpen] = useState(false);
@@ -2712,8 +2723,8 @@ function App() {
                         onLocationSelect={handleLocationSelect}
                         onShowDetails={handleShowDetails}
                         onLocationDoubleClick={handleLocationDoubleClick}
-                        statusFilter={statusFilter}
-                        onStatusFilterChange={setStatusFilter}
+                        statusFilters={statusFilters}
+                        onStatusFiltersChange={setStatusFilters}
                       />
                     </div>
                   </div>
@@ -2893,6 +2904,9 @@ function App() {
                   isNearby={trackingState.isNearby}
                   isWorking={trackingState.isWorking}
                   workStartTime={trackingState.workStartTime}
+                  manualGpsAllowed={!!userCanManualGps}
+                  manualGpsMode={manualGpsMode}
+                  onManualGpsModeChange={setManualGpsMode}
                   onArrivalConfirm={handleArrivalConfirm}
                   onCompletionConfirm={handleCompletionConfirm}
                   onCancelRoute={handleCancelRoute}

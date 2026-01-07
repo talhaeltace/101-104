@@ -1,7 +1,44 @@
 import React, { useState, useRef } from 'react';
-import { Search, MapPin, Cpu, ChevronDown, ChevronUp, DoorClosed } from 'lucide-react';
+import { Search, MapPin, Cpu, ChevronDown, ChevronUp, DoorClosed, Filter } from 'lucide-react';
 import { Location, Region } from '../data/regions';
 import { fieldsMatchQuery } from '../lib/search';
+
+type StatusFilterKey =
+  | 'active'
+  | 'configured'
+  | 'started'
+  | 'installed'
+  | 'installed_only'
+  | 'accepted'
+  | 'untouched'
+  | 'todo'
+  | 'missing'
+  | 'card'
+  | 'notes'
+  | 'card_installed'
+  | 'card_active'
+  | 'rtu'
+  | 'rtu_installed'
+  | 'rtu_todo';
+
+const FILTER_OPTIONS: Array<{ key: StatusFilterKey; label: string }> = [
+  { key: 'accepted', label: 'Kabulü Yapılanlar' },
+  { key: 'active', label: 'Devreye Alınmış' },
+  { key: 'configured', label: 'Konfigüre Edildi' },
+  { key: 'started', label: 'Başlandı' },
+  { key: 'rtu', label: 'RTU Var' },
+  { key: 'rtu_installed', label: 'RTU Kuruldu' },
+  { key: 'rtu_todo', label: 'RTU Tamamlanacak' },
+  { key: 'card', label: 'Kartlı Geçiş' },
+  { key: 'installed', label: 'Montajı Yapıldı' },
+  { key: 'installed_only', label: 'Sadece Montajı Yapıldı' },
+  { key: 'card_installed', label: 'Montajı Yapılmış (Kartlı geçiş)' },
+  { key: 'card_active', label: 'Devreye Alınmış (Kartlı geçiş)' },
+  { key: 'todo', label: 'Tamamlanacak' },
+  { key: 'missing', label: 'Eksik' },
+  { key: 'untouched', label: 'Hiç Girilmedi' },
+  { key: 'notes', label: 'Notlar' },
+];
 
 interface LocationSelectorProps {
   locations: Location[];
@@ -15,9 +52,9 @@ interface LocationSelectorProps {
   onLocationSelect: (location: Location) => void;
   onLocationDoubleClick?: (location: Location) => void;
   onShowDetails?: (location: Location) => void;
-  // optional controlled filter state
-  statusFilter?: 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted';
-  onStatusFilterChange?: (s: 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted') => void;
+  // optional controlled filter state (multi-select). Empty/undefined means "Tümü".
+  statusFilters?: StatusFilterKey[];
+  onStatusFiltersChange?: (filters: StatusFilterKey[]) => void;
 }
 
 const LocationSelector: React.FC<LocationSelectorProps> = ({ 
@@ -30,21 +67,58 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   onLocationSelect, 
   onLocationDoubleClick,
   onShowDetails,
-  statusFilter: statusFilterProp,
-  onStatusFilterChange
+  statusFilters: statusFiltersProp,
+  onStatusFiltersChange
 }) => {
   const [internalSearchTerm, setInternalSearchTerm] = useState('');
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const effectiveSearchTerm = typeof searchTermProp === 'string' ? searchTermProp : internalSearchTerm;
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(() => {
+    try {
+      return localStorage.getItem('location_selector_expanded_v1') !== '0';
+    } catch {
+      return true;
+    }
+  });
   const [isPressed, setIsPressed] = useState(false);
-  const [internalStatusFilter, setInternalStatusFilter] = useState<'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted'>('all');
-  const effectiveStatusFilter = statusFilterProp ?? internalStatusFilter;
-  const setStatusFilter = (s: 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted') => {
-    if (onStatusFilterChange) onStatusFilterChange(s);
-    else setInternalStatusFilter(s);
+
+  const [isFilterExpanded, setIsFilterExpanded] = useState(() => {
+    try {
+      return localStorage.getItem('location_selector_filter_expanded_v1') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const [internalStatusFilters, setInternalStatusFilters] = useState<StatusFilterKey[]>([]);
+  const effectiveStatusFilters = statusFiltersProp ?? internalStatusFilters;
+
+  const setStatusFilters = (next: StatusFilterKey[]) => {
+    const unique = Array.from(new Set(next));
+    if (onStatusFiltersChange) onStatusFiltersChange(unique);
+    else setInternalStatusFilters(unique);
+
+    // Keep filter panel open while multi-selecting.
+    setIsFilterExpanded(true);
   };
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('location_selector_expanded_v1', isExpanded ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [isExpanded]);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('location_selector_filter_expanded_v1', isFilterExpanded ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [isFilterExpanded]);
+
 
   // If an external searchTerm is provided (header search), auto-expand the selector
   // after the user pauses typing (debounced). This prevents layout thrash / scroll
@@ -70,16 +144,28 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     return { label: 'Hiç Girilmedi', colorClass: 'text-amber-900', dotClass: 'bg-amber-800' };
   };
 
-  const matchesStatus = (location: Location) => {
-    switch (effectiveStatusFilter) {
+  const getPlannedRtuCount = (loc: Location) => {
+    const eq = loc.details?.equipment;
+    const rtuCount = eq?.rtuCount ?? 0;
+    if (rtuCount > 0) return rtuCount;
+    const teias = eq?.teiasRtuInstallation ?? 0;
+    if (teias > 0) return teias;
+    return loc.details?.hasRTU ? 1 : 0;
+  };
+
+  const isRtuLocation = (loc: Location) => getPlannedRtuCount(loc) > 0 || !!loc.details?.hasRTU;
+
+  const matchesOneStatus = (filterKey: StatusFilterKey, location: Location) => {
+    switch (filterKey) {
       case 'active':
         return !!(location.details.isActive && location.details.isConfigured);
       case 'configured':
         return !!location.details.isConfigured;
+      case 'started':
+        return !!location.details.isConfigured && !location.details.isInstalled && !location.details.isAccepted;
       case 'card_installed':
         return !!(location.details.hasCardAccess && location.details.isInstalledCardAccess);
       case 'card_active':
-        // Use the card-specific "active" flag (isActiveCardAccess) instead of the generic isActive
         return !!(location.details.hasCardAccess && location.details.isActiveCardAccess);
       case 'card':
         return !!location.details.hasCardAccess;
@@ -87,17 +173,30 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
         return !!(location.note && String(location.note).trim().length > 0);
       case 'installed':
         return !!location.details.isInstalled;
+      case 'installed_only':
+        return !!location.details.isInstalled && !location.details.isAccepted;
       case 'todo':
-        // tamamlanacak = not active
         return !location.details.isActive;
       case 'missing':
-        // eksik = neither configured nor active
         return !location.details.isActive && !location.details.isConfigured;
       case 'accepted':
         return !!location.details.isAccepted;
+      case 'untouched':
+        return !location.details.isConfigured && !location.details.isInstalled && !location.details.isAccepted;
+      case 'rtu':
+        return isRtuLocation(location);
+      case 'rtu_installed':
+        return !!location.details.hasRTU;
+      case 'rtu_todo':
+        return !location.details.hasRTU && getPlannedRtuCount(location) > 0;
       default:
         return true;
     }
+  };
+
+  const matchesStatus = (location: Location) => {
+    if (!effectiveStatusFilters || effectiveStatusFilters.length === 0) return true; // Tümü
+    return effectiveStatusFilters.some(k => matchesOneStatus(k, location));
   };
 
   const q = effectiveSearchTerm || '';
@@ -426,26 +525,78 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
           </button>
         </div>
 
-        {/* Filter select */}
+        {/* Filter (multi-select) */}
         <div className="mb-3">
           <label className="block text-xs font-medium text-gray-500 mb-1">Filtre</label>
-          <select
-            value={effectiveStatusFilter}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setStatusFilter(e.target.value as 'all' | 'active' | 'configured' | 'installed' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'accepted')}
-            className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400"
+          <button
+            type="button"
+            onClick={() => setIsFilterExpanded(v => !v)}
+            className="w-full flex items-center justify-between gap-2 text-sm border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400"
           >
-                <option value="all">Tümü</option>
-                <option value="accepted">Kabulü Yapılanlar</option>
-                <option value="active">Devreye Alınmış</option>
-                <option value="configured">Konfigüre Edildi</option>
-                <option value="card">Kartlı Geçiş</option>
-                <option value="installed">Montajı Yapıldı</option>
-                <option value="card_installed">Montajı Yapılmış (Kartlı geçiş)</option>
-                <option value="card_active">Devreye Alınmış (Kartlı geçiş)</option>
-                <option value="todo">Tamamlanacak</option>
-                <option value="missing">Eksik</option>
-                <option value="notes">Notlar</option>
-              </select>
+            <div className="flex items-center gap-2 min-w-0">
+              <Filter className="w-4 h-4 text-gray-500 flex-shrink-0" />
+              <span className="truncate text-gray-700">
+                {effectiveStatusFilters.length === 0 ? 'Tümü' : `${effectiveStatusFilters.length} seçili`}
+              </span>
+            </div>
+            {isFilterExpanded ? (
+              <ChevronUp className="w-4 h-4 text-gray-500" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-gray-500" />
+            )}
+          </button>
+
+          {isFilterExpanded && (
+            <div
+              className="mt-2 rounded-xl border border-gray-200 bg-white shadow-sm p-2"
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+            <button
+              type="button"
+              onClick={() => setStatusFilters([])}
+              className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-gray-50 text-left"
+            >
+              <input
+                type="checkbox"
+                readOnly
+                checked={effectiveStatusFilters.length === 0}
+                className="h-4 w-4 rounded border-gray-300"
+              />
+              <span className="text-sm text-gray-800">Tümü</span>
+            </button>
+
+            <div className="my-1 h-px bg-gray-100" />
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                {FILTER_OPTIONS.map(opt => {
+                  const checked = effectiveStatusFilters.includes(opt.key);
+                  return (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => {
+                        const set = new Set(effectiveStatusFilters);
+                        if (set.has(opt.key)) set.delete(opt.key);
+                        else set.add(opt.key);
+                        setStatusFilters(Array.from(set));
+                      }}
+                      className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-gray-50 text-left"
+                    >
+                      <input
+                        type="checkbox"
+                        readOnly
+                        checked={checked}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <span className="text-sm text-gray-800">{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Search - always render a search input under the selector header.

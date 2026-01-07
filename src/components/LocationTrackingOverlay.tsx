@@ -9,6 +9,9 @@ interface LocationTrackingOverlayProps {
   isNearby: boolean;
   isWorking: boolean;
   workStartTime: Date | null;
+  manualGpsAllowed?: boolean;
+  manualGpsMode?: boolean;
+  onManualGpsModeChange?: (enabled: boolean) => void;
   onArrivalConfirm: () => void;
   onCompletionConfirm: () => void;
   onCancelRoute?: () => void;
@@ -37,6 +40,9 @@ const LocationTrackingOverlay: React.FC<LocationTrackingOverlayProps> = ({
   isNearby,
   isWorking,
   workStartTime,
+  manualGpsAllowed,
+  manualGpsMode,
+  onManualGpsModeChange,
   onArrivalConfirm,
   onCompletionConfirm,
   onCancelRoute
@@ -71,6 +77,27 @@ const LocationTrackingOverlay: React.FC<LocationTrackingOverlayProps> = ({
         overflow: 'hidden'
       }}
     >
+      {/* Manual GPS toggle (permission-gated) */}
+      {manualGpsAllowed && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => onManualGpsModeChange?.(!manualGpsMode)}
+            style={{
+              padding: '6px 10px',
+              backgroundColor: manualGpsMode ? 'rgba(59,130,246,0.18)' : 'rgba(255,255,255,0.08)',
+              color: manualGpsMode ? '#93c5fd' : '#e5e7eb',
+              borderRadius: '10px',
+              border: '1px solid rgba(255,255,255,0.12)',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+          >
+            GPS: {manualGpsMode ? 'Manuel' : 'Otomatik'}
+          </button>
+        </div>
+      )}
+
       {/* Main info row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
         <div
@@ -102,7 +129,7 @@ const LocationTrackingOverlay: React.FC<LocationTrackingOverlayProps> = ({
                 flexShrink: 0
               }}
             />
-            {isNearby ? 'Yakınındasınız' : `${formatDistance(distanceToTarget)}`}
+            {isNearby ? 'Yakınındasınız' : (manualGpsMode ? 'Manuel mod' : `${formatDistance(distanceToTarget)}`)}
           </div>
         </div>
 
@@ -128,7 +155,7 @@ const LocationTrackingOverlay: React.FC<LocationTrackingOverlayProps> = ({
       </div>
 
       {/* Swipe actions - full width and prominent when available */}
-      {isNearby && !isWorking && (
+      {((isNearby || manualGpsMode) && !isWorking) && (
         <div style={{ width: '100%' }}>
           <SwipeConfirm
             text="Kaydırın: Adrese Vardım"

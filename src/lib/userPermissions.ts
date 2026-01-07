@@ -12,6 +12,7 @@ export interface UserPermissions {
   can_export: boolean;
   can_route: boolean;
   can_team_view: boolean;
+  can_manual_gps: boolean;
 }
 
 export interface AppUser {
@@ -22,6 +23,7 @@ export interface AppUser {
   full_name?: string;
   phone?: string;
   is_active: boolean;
+  otp_required: boolean;
   created_at: string;
   last_login_at?: string;
   // Permissions
@@ -32,6 +34,7 @@ export interface AppUser {
   can_export: boolean;
   can_route: boolean;
   can_team_view: boolean;
+  can_manual_gps: boolean;
 }
 
 // Default permissions based on role
@@ -43,7 +46,8 @@ export const DEFAULT_PERMISSIONS: Record<string, UserPermissions> = {
     can_delete: true,
     can_export: true,
     can_route: true,
-    can_team_view: true
+    can_team_view: true,
+    can_manual_gps: false
   },
   editor: {
     can_view: true,
@@ -52,7 +56,8 @@ export const DEFAULT_PERMISSIONS: Record<string, UserPermissions> = {
     can_delete: false,
     can_export: true,
     can_route: true,
-    can_team_view: false
+    can_team_view: false,
+    can_manual_gps: false
   },
   viewer: {
     can_view: false,
@@ -61,7 +66,8 @@ export const DEFAULT_PERMISSIONS: Record<string, UserPermissions> = {
     can_delete: false,
     can_export: false,
     can_route: false,
-    can_team_view: false
+    can_team_view: false,
+    can_manual_gps: false
   },
   user: {
     can_view: false,
@@ -70,7 +76,8 @@ export const DEFAULT_PERMISSIONS: Record<string, UserPermissions> = {
     can_delete: false,
     can_export: false,
     can_route: false,
-    can_team_view: false
+    can_team_view: false,
+    can_manual_gps: false
   }
 };
 
@@ -119,6 +126,7 @@ export async function listUsers(): Promise<AppUser[]> {
         full_name: user.full_name || undefined,
         phone: user.phone || undefined,
         is_active: user.is_active !== false,
+        otp_required: user.otp_required !== false,
         created_at: user.created_at,
         last_login_at: user.last_login_at || undefined,
         // Permissions - veritabanından gelen değeri kullan, yoksa rol varsayılanı
@@ -128,7 +136,8 @@ export async function listUsers(): Promise<AppUser[]> {
         can_delete: typeof user.can_delete === 'boolean' ? user.can_delete : roleDefaults.can_delete,
         can_export: typeof user.can_export === 'boolean' ? user.can_export : roleDefaults.can_export,
         can_route: typeof user.can_route === 'boolean' ? user.can_route : roleDefaults.can_route,
-        can_team_view: typeof user.can_team_view === 'boolean' ? user.can_team_view : roleDefaults.can_team_view
+        can_team_view: typeof user.can_team_view === 'boolean' ? user.can_team_view : roleDefaults.can_team_view,
+        can_manual_gps: typeof user.can_manual_gps === 'boolean' ? user.can_manual_gps : roleDefaults.can_manual_gps
       };
     });
   } catch (err) {
@@ -192,6 +201,7 @@ export async function updateUser(
     fullName?: string;
     phone?: string;
     isActive?: boolean;
+    otpRequired?: boolean;
   }
 ): Promise<{ success: boolean; error?: string }> {
   try {
@@ -208,6 +218,7 @@ export async function updateUser(
     if (updates.fullName != null && String(updates.fullName).trim() !== '') params.p_full_name = updates.fullName;
     if (updates.phone != null && String(updates.phone).trim() !== '') params.p_phone = updates.phone;
     if (typeof updates.isActive === 'boolean') params.p_is_active = updates.isActive;
+    if (typeof updates.otpRequired === 'boolean') params.p_otp_required = updates.otpRequired;
 
     const { data, error } = await supabase.rpc('admin_update_app_user', params);
 
@@ -244,6 +255,7 @@ export async function updateUserPermissions(
     if (permissions.can_export !== undefined) updateData.can_export = permissions.can_export;
     if (permissions.can_route !== undefined) updateData.can_route = permissions.can_route;
     if (permissions.can_team_view !== undefined) updateData.can_team_view = permissions.can_team_view;
+    if (permissions.can_manual_gps !== undefined) updateData.can_manual_gps = permissions.can_manual_gps;
 
     console.log('Saving permissions for user:', userId, updateData); // DEBUG
 

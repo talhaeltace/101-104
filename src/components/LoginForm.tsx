@@ -10,8 +10,13 @@ interface Props {
 
 const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
   const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [loginStep, setLoginStep] = useState<'credentials' | 'otp'>('credentials');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpChallengeId, setOtpChallengeId] = useState<string | null>(null);
+  const [otpEmailMasked, setOtpEmailMasked] = useState<string | null>(null);
+  const [otpCooldownUntil, setOtpCooldownUntil] = useState<number>(0);
   const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -19,9 +24,61 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  const getInvokeErrorMessage = async (invokeError: unknown) => {
+    const e: any = invokeError;
+    const ctx = e?.context;
+
+    const response: Response | null =
+      typeof Response !== 'undefined' && ctx instanceof Response
+        ? ctx
+        : typeof Response !== 'undefined' && ctx?.response instanceof Response
+          ? ctx.response
+          : null;
+
+    if (response) {
+      try {
+        const cloned = response.clone();
+        const text = await cloned.text();
+        if (text) {
+          try {
+            const parsed = JSON.parse(text);
+            const serverMsg = parsed?.error ?? parsed?.message;
+            if (typeof serverMsg === 'string' && serverMsg.trim()) {
+              return `${serverMsg} (HTTP ${response.status})`;
+            }
+            return `Sunucu hatası (HTTP ${response.status})`;
+          } catch {
+            return `${text} (HTTP ${response.status})`;
+          }
+        }
+        return `Sunucu hatası (HTTP ${response.status})`;
+      } catch {
+        // ignore
+      }
+    }
+
+    const ctxError =
+      ctx?.error ??
+      ctx?.message ??
+      ctx?.body?.error ??
+      ctx?.body?.message ??
+      ctx?.data?.error ??
+      ctx?.data?.message;
+
+    if (typeof ctxError === 'string' && ctxError.trim()) return ctxError;
+    if (typeof ctx === 'string' && ctx.trim()) return ctx;
+    if (typeof e?.message === 'string' && e.message.trim()) return e.message;
+    return 'Giriş başarısız';
+  };
+
   const resetForm = () => {
     setUsername('');
     setPassword('');
+    setOtpCode('');
+    setOtpChallengeId(null);
+    setOtpEmailMasked(null);
+    setOtpCooldownUntil(0);
+    setLoginStep('credentials');
     setConfirmPassword('');
     setFullName('');
     setEmail('');
@@ -34,19 +91,110 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
     setError(null);
     setLoading(true);
     try {
-      const { data, error } = await supabase.rpc('authenticate_app_user', { p_username: username, p_password: password });
+      // Step 1: validate credentials + send OTP email via Edge Function
+      const { data, error } = await supabase.functions.invoke('send-login-otp', {
+        body: { username, password },
+      });
+
       if (error) {
-        setError(error.message || 'Giriş başarısız');
+        setError(await getInvokeErrorMessage(error));
         setLoading(false);
         return;
       }
+
+      // Some users are allowed to login without OTP (admin-controlled).
+      if (data?.bypassOtp) {
+        const directUser = (data as any)?.user;
+        if (!directUser) {
+          setError('Giriş tamamlanamadı');
+          setLoading(false);
+          return;
+        }
+        onSuccess(directUser);
+        return;
+      }
+
+      if (!data?.challengeId) {
+        setError('Doğrulama kodu gönderilemedi');
+        setLoading(false);
+        return;
+      }
+
+      setOtpChallengeId(String(data.challengeId));
+      setOtpEmailMasked(data.emailMasked ? String(data.emailMasked) : null);
+      setOtpCode('');
+      setLoginStep('otp');
+      // basic cooldown to reduce accidental re-sends
+      setOtpCooldownUntil(Date.now() + 30_000);
+    } catch (err: any) {
+      setError(err?.message ?? 'Bilinmeyen hata');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      if (!otpChallengeId) {
+        setError('Doğrulama oturumu bulunamadı. Lütfen tekrar giriş yapın.');
+        setLoading(false);
+        return;
+      }
+
+      const code = otpCode.trim();
+      if (!/^\d{6}$/.test(code)) {
+        setError('Kod 6 haneli olmalıdır');
+        setLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase.rpc('verify_login_otp', {
+        p_challenge_id: otpChallengeId,
+        p_code: code,
+      });
+
+      if (error) {
+        setError(error.message || 'Kod doğrulanamadı');
+        setLoading(false);
+        return;
+      }
+
       const user = Array.isArray(data) ? data[0] : data;
       if (!user) {
-        setError('Kullanıcı adı veya parola hatalı');
+        setError('Kod hatalı veya süresi doldu');
         setLoading(false);
         return;
       }
+
       onSuccess(user);
+    } catch (err: any) {
+      setError(err?.message ?? 'Bilinmeyen hata');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (loading) return;
+    if (Date.now() < otpCooldownUntil) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('send-login-otp', {
+        body: { username, password },
+      });
+      if (error) {
+        setError((await getInvokeErrorMessage(error)) || 'Kod gönderilemedi');
+        return;
+      }
+      if (data?.challengeId) setOtpChallengeId(String(data.challengeId));
+      if (data?.emailMasked) setOtpEmailMasked(String(data.emailMasked));
+      setOtpCooldownUntil(Date.now() + 30_000);
+      setSuccess('Kod tekrar gönderildi');
+      setTimeout(() => setSuccess(null), 2000);
     } catch (err: any) {
       setError(err?.message ?? 'Bilinmeyen hata');
     } finally {
@@ -118,7 +266,8 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
               <p className="text-gray-500 mt-2">Devam etmek için giriş yapın</p>
             </div>
 
-            <form onSubmit={handleLogin} className="space-y-6">
+            {loginStep === 'credentials' ? (
+              <form onSubmit={handleLogin} className="space-y-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Kullanıcı Adı</label>
                 <div className="relative">
@@ -175,19 +324,96 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
                   </>
                 )}
               </button>
-            </form>
 
-            <div className="mt-6 text-center">
-              <p className="text-sm text-gray-600">
-                Hesabınız yok mu?{' '}
+              <div className="mt-6 text-center">
+                <p className="text-sm text-gray-600">
+                  Hesabınız yok mu?{' '}
+                  <button
+                    onClick={() => { resetForm(); setMode('register'); }}
+                    className="font-medium text-blue-600 hover:text-blue-500"
+                  >
+                    Kayıt Ol
+                  </button>
+                </p>
+              </div>
+              </form>
+            ) : (
+              <form onSubmit={handleVerifyOtp} className="space-y-6">
+                <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded">
+                  <p className="text-sm text-blue-700">
+                    {otpEmailMasked
+                      ? `Doğrulama kodu ${otpEmailMasked} adresine gönderildi.`
+                      : 'Doğrulama kodu e-posta adresinize gönderildi.'}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">E-posta Kodu</label>
+                  <input
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value)}
+                    className="block w-full px-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                    placeholder="6 haneli kod"
+                    maxLength={6}
+                    required
+                  />
+                </div>
+
+                {error && (
+                  <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded">
+                    <p className="text-sm text-red-700">{error}</p>
+                  </div>
+                )}
+
+                {success && (
+                  <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded">
+                    <p className="text-sm text-green-700">{success}</p>
+                  </div>
+                )}
+
                 <button
-                  onClick={() => { resetForm(); setMode('register'); }}
-                  className="font-medium text-blue-600 hover:text-blue-500"
+                  type="submit"
+                  disabled={loading}
+                  className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
                 >
-                  Kayıt Ol
+                  {loading ? (
+                    <>
+                      <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
+                      Doğrulanıyor...
+                    </>
+                  ) : (
+                    <>Doğrula</>
+                  )}
                 </button>
-              </p>
-            </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError(null);
+                      setSuccess(null);
+                      setOtpCode('');
+                      setOtpChallengeId(null);
+                      setLoginStep('credentials');
+                    }}
+                    className="text-sm text-gray-600 hover:text-gray-900"
+                  >
+                    Geri
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={loading || Date.now() < otpCooldownUntil}
+                    onClick={handleResendOtp}
+                    className="text-sm font-medium text-blue-600 hover:text-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Tekrar kod gönder
+                  </button>
+                </div>
+              </form>
+            )}
           </>
         ) : (
           <>

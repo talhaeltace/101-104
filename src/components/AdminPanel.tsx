@@ -36,7 +36,8 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
     can_delete: false,
     can_export: false,
     can_route: true,
-    can_team_view: false
+    can_team_view: false,
+    can_manual_gps: false
   });
 
   // Yeni kullanıcı formu
@@ -57,7 +58,8 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
     email: '',
     fullName: '',
     phone: '',
-    isActive: true
+    isActive: true,
+    otpRequired: true
   });
 
   useEffect(() => {
@@ -110,7 +112,8 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
       email: editUser.email || undefined,
       fullName: editUser.fullName || undefined,
       phone: editUser.phone || undefined,
-      isActive: editUser.isActive
+      isActive: editUser.isActive,
+      otpRequired: editUser.otpRequired
     });
 
     if (result.success) {
@@ -149,7 +152,8 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
       email: user.email || '',
       fullName: user.full_name || '',
       phone: user.phone || '',
-      isActive: user.is_active
+      isActive: user.is_active,
+      otpRequired: user.otp_required !== false
     });
     setIsEditModalOpen(true);
   };
@@ -164,7 +168,8 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
       can_delete: user.can_delete ?? roleDefaults.can_delete,
       can_export: user.can_export ?? roleDefaults.can_export,
       can_route: user.can_route ?? roleDefaults.can_route,
-      can_team_view: user.can_team_view ?? roleDefaults.can_team_view
+      can_team_view: user.can_team_view ?? roleDefaults.can_team_view,
+      can_manual_gps: user.can_manual_gps ?? roleDefaults.can_manual_gps
     });
     setIsPermissionsModalOpen(true);
   };
@@ -567,6 +572,20 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                   />
                   <label htmlFor="isActive" className="text-sm font-medium text-gray-700">Aktif</label>
                 </div>
+
+                <div className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    id="otpRequired"
+                    checked={editUser.otpRequired}
+                    onChange={e => setEditUser({ ...editUser, otpRequired: e.target.checked })}
+                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 mt-0.5"
+                  />
+                  <label htmlFor="otpRequired" className="text-sm font-medium text-gray-700">
+                    OTP zorunlu
+                    <div className="text-xs text-gray-500 font-normal">Kapalıysa kullanıcı kod beklemeden giriş yapar</div>
+                  </label>
+                </div>
               </div>
 
               <div className="flex justify-end gap-2 mt-6">
@@ -691,6 +710,19 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                   <div>
                     <div className="font-medium text-gray-900">Ekip Durumu</div>
                     <div className="text-xs text-gray-500">Ekip panelini ve diğer kullanıcıları görebilir</div>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={permissionsForm.can_manual_gps}
+                    onChange={e => setPermissionsForm({...permissionsForm, can_manual_gps: e.target.checked})}
+                    className="w-5 h-5 text-slate-700 rounded focus:ring-slate-500"
+                  />
+                  <div>
+                    <div className="font-medium text-gray-900">Manuel GPS</div>
+                    <div className="text-xs text-gray-500">GPS kapatıp "Adrese Vardım" kaydırmasını hemen kullanabilir</div>
                   </div>
                 </label>
               </div>

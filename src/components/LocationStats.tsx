@@ -25,6 +25,24 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
   // NOTE: Total card access should be per-location (2-door should NOT increase total).
   const cardAccessCount = countKgLocations(locations, loc => !!loc.details.hasCardAccess);
   const acceptedCount = locations.filter(loc => !!loc.details.isAccepted).length;
+
+  const getPlannedRtuCount = (loc: Location) => {
+    const eq = loc.details?.equipment;
+    const rtuCount = eq?.rtuCount ?? 0;
+    if (rtuCount > 0) return rtuCount;
+    const teias = eq?.teiasRtuInstallation ?? 0;
+    if (teias > 0) return teias;
+    return loc.details?.hasRTU ? 1 : 0;
+  };
+
+  // RTU counts are unit-based (rtuCount) per the requested logic.
+  const rtuInstalled = locations.reduce((sum, loc) => sum + (loc.details.hasRTU ? getPlannedRtuCount(loc) : 0), 0);
+  const rtuTodo = locations.reduce((sum, loc) => {
+    if (loc.details.hasRTU) return sum;
+    const planned = getPlannedRtuCount(loc);
+    return sum + planned;
+  }, 0);
+  const rtuTotal = rtuInstalled + rtuTodo;
   
   // Seçili bölge için istatistikler
   const selectedActiveCount = selectedRegionLocations.filter(loc => loc.details.isActive).length;
@@ -32,6 +50,14 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
   const selectedInstalledCount = selectedRegionLocations.filter(loc => !!loc.details.isInstalled).length;
   const selectedCardAccessCount = countKgLocations(selectedRegionLocations, loc => !!loc.details.hasCardAccess);
   const selectedAcceptedCount = selectedRegionLocations.filter(loc => !!loc.details.isAccepted).length;
+
+  const selectedRtuInstalled = selectedRegionLocations.reduce((sum, loc) => sum + (loc.details.hasRTU ? getPlannedRtuCount(loc) : 0), 0);
+  const selectedRtuTodo = selectedRegionLocations.reduce((sum, loc) => {
+    if (loc.details.hasRTU) return sum;
+    const planned = getPlannedRtuCount(loc);
+    return sum + planned;
+  }, 0);
+  const selectedRtuTotal = selectedRtuInstalled + selectedRtuTodo;
 
   const stats = [
     {
@@ -104,6 +130,33 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       icon: TrendingUp,
       color: 'bg-cyan-500',
       textColor: 'text-cyan-600',
+      showPercentage: true
+    },
+    {
+      label: 'RTU',
+      value: rtuTotal,
+      selectedValue: selectedRtuTotal,
+      icon: Activity,
+      color: 'bg-slate-500',
+      textColor: 'text-slate-600',
+      showPercentage: true
+    },
+    {
+      label: 'Kurulan RTU',
+      value: rtuInstalled,
+      selectedValue: selectedRtuInstalled,
+      icon: CheckCircle2,
+      color: 'bg-slate-600',
+      textColor: 'text-slate-700',
+      showPercentage: true
+    },
+    {
+      label: 'Tamamlanacak RTU',
+      value: rtuTodo,
+      selectedValue: selectedRtuTodo,
+      icon: Zap,
+      color: 'bg-slate-400',
+      textColor: 'text-slate-600',
       showPercentage: true
     },
     {
