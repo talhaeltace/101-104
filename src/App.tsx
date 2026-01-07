@@ -807,6 +807,23 @@ function App() {
       const link = target?.closest?.('a') as HTMLAnchorElement | null;
       const href = link?.getAttribute?.('href') || '';
 
+      // When focusing/typing in a form field (especially on mobile with virtual keyboard),
+      // the browser may legitimately adjust scroll. Our "restore" logic can fight that
+      // and cause the view to jump away from the focused input.
+      const activeEl = document.activeElement as HTMLElement | null;
+      const activeTag = (activeEl?.tagName || '').toUpperCase();
+      const isFormActive =
+        !!activeEl &&
+        (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT' || activeEl.isContentEditable);
+      const isFormTarget =
+        !!target &&
+        !!(target.closest?.('input,textarea,select,[contenteditable="true"]') || target.closest?.('[contenteditable=""]'));
+      if (isFormActive || isFormTarget) {
+        // Still prevent hash anchors from jumping.
+        if (href.startsWith('#')) e.preventDefault();
+        return;
+      }
+
       // Hash-only navigation ("#", "#close", etc) commonly scrolls the page to top.
       // Leaflet and some plugins use <a href="#..."> for controls.
       if (href.startsWith('#')) {

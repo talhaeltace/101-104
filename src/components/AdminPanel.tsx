@@ -223,15 +223,15 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
       <div className="bg-white w-full h-full overflow-hidden flex flex-col overscroll-contain">
         {/* Header */}
         <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900 text-white">
-          <h2 className="text-xl font-bold flex items-center gap-2">
+          <h2 className="text-lg sm:text-xl font-bold flex items-center gap-2 flex-1 min-w-0">
             <svg className="w-6 h-6 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
-            Admin Paneli - Kullanıcı Yönetimi
+            <span className="truncate">Admin Paneli - Kullanıcı Yönetimi</span>
           </h2>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors shrink-0"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -266,10 +266,10 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
           ) : (
             <>
               {/* Actions */}
-              <div className="mb-4 flex gap-2">
+              <div className="mb-4 flex flex-col sm:flex-row gap-2">
                 <button
                   onClick={() => setIsCreateModalOpen(true)}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 transition-colors"
+                  className="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
@@ -280,7 +280,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                   onClick={() => {
                     loadData();
                   }}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center gap-2 transition-colors"
+                  className="w-full sm:w-auto px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center justify-center gap-2 transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -289,8 +289,8 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                 </button>
               </div>
 
-              {/* Users Table */}
-              <div className="overflow-x-auto rounded-lg border border-gray-200">
+              {/* Users (Desktop table) */}
+              <div className="hidden md:block rounded-lg border border-gray-200 overflow-hidden">
                 <table className="w-full">
                   <thead>
                     <tr className="bg-gray-50 border-b">
@@ -388,6 +388,73 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                 </table>
               </div>
 
+              {/* Users (Mobile cards) */}
+              <div className="md:hidden space-y-3">
+                {users.length === 0 ? (
+                  <div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-sm text-gray-500">
+                    Henüz kullanıcı bulunmuyor
+                  </div>
+                ) : (
+                  users.map(user => (
+                    <div key={user.id} className="rounded-lg border border-gray-200 bg-white p-3">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold shrink-0">
+                          {user.username.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-gray-900 truncate">{user.username}</div>
+                          {user.full_name && <div className="text-sm text-gray-500 truncate">{user.full_name}</div>}
+                          {user.email && <div className="text-xs text-gray-400 truncate">{user.email}</div>}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
+                          {user.role === 'admin' ? 'Admin' : user.role === 'editor' ? 'Editör' : user.role === 'viewer' ? 'Görüntüleyici' : 'Kullanıcı'}
+                        </span>
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${user.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                          {user.is_active ? 'Aktif' : 'Pasif'}
+                        </span>
+                        <span className="text-xs text-gray-500">{formatDate(user.created_at)}</span>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-1">
+                        {user.can_view && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">Görüntüle</span>}
+                        {user.can_edit && <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">Düzenle</span>}
+                        {user.can_create && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">Ekle</span>}
+                        {user.can_delete && <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs">Sil</span>}
+                        {user.can_export && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">Dışa Aktar</span>}
+                        {user.can_route && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs">Rota</span>}
+                        {user.can_team_view && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs">Ekip</span>}
+                      </div>
+
+                      <div className="mt-3 flex justify-end gap-2">
+                        <button
+                          onClick={() => openEditModal(user)}
+                          className="px-3 py-2 text-sm font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                        >
+                          Düzenle
+                        </button>
+                        <button
+                          onClick={() => openPermissionsModal(user)}
+                          className="px-3 py-2 text-sm font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
+                        >
+                          Yetkiler
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUser(user.id)}
+                          className="px-3 py-2 text-sm font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50"
+                          disabled={user.id === currentUserId}
+                        >
+                          Sil
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
               {/* User count */}
               <div className="mt-4 text-sm text-gray-500">
                 Toplam {users.length} kullanıcı
@@ -398,8 +465,9 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
 
         {/* Create User Modal */}
         {isCreateModalOpen && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1210] p-4">
-            <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+          <div className="fixed inset-0 bg-black/50 z-[1210] p-4 overflow-y-auto">
+            <div className="min-h-full flex items-start sm:items-center justify-center">
+              <div className="bg-white rounded-xl p-5 sm:p-6 w-full max-w-md shadow-2xl my-8">
               <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                 <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
@@ -488,13 +556,15 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                 </button>
               </div>
             </div>
+            </div>
           </div>
         )}
 
         {/* Edit User Modal */}
         {isEditModalOpen && selectedUser && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1210] p-4">
-            <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+          <div className="fixed inset-0 bg-black/50 z-[1210] p-4 overflow-y-auto">
+            <div className="min-h-full flex items-start sm:items-center justify-center">
+              <div className="bg-white rounded-xl p-5 sm:p-6 w-full max-w-md shadow-2xl my-8">
               <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                 <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -603,13 +673,15 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                 </button>
               </div>
             </div>
+            </div>
           </div>
         )}
 
         {/* Permissions Modal */}
         {isPermissionsModalOpen && selectedUser && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1210] p-4">
-            <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+          <div className="fixed inset-0 bg-black/50 z-[1210] p-4 overflow-y-auto">
+            <div className="min-h-full flex items-start sm:items-center justify-center">
+              <div className="bg-white rounded-xl p-5 sm:p-6 w-full max-w-md shadow-2xl my-8">
               <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                 <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
@@ -741,6 +813,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                   Kaydet
                 </button>
               </div>
+            </div>
             </div>
           </div>
         )}

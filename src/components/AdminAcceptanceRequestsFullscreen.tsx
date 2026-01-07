@@ -320,18 +320,18 @@ export default function AdminAcceptanceRequestsFullscreen({
     <div className="fixed inset-0 z-[1400] bg-white">
       <div className="h-14 border-b border-gray-100 bg-white/90 backdrop-blur-md flex items-center justify-between px-4">
         <div className="text-sm font-semibold text-gray-900">Kabul Onayları</div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <button
             type="button"
             onClick={loadAcceptanceRequests}
-            className="px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+            className="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
           >
             {acceptanceLoading ? 'Yükleniyor…' : 'Yenile'}
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+            className="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
           >
             Kapat
           </button>
@@ -355,7 +355,8 @@ export default function AdminAcceptanceRequestsFullscreen({
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            {/* Desktop table */}
+            <div className="hidden md:block">
               <table className="w-full">
                 <thead>
                   <tr className="border-b bg-white">
@@ -418,6 +419,64 @@ export default function AdminAcceptanceRequestsFullscreen({
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile cards */}
+            <div className="md:hidden divide-y divide-gray-100">
+              {pendingAcceptanceRequests.length === 0 ? (
+                <div className="p-6 text-center text-sm text-gray-500">Onay bekleyen kayıt yok</div>
+              ) : (
+                pendingAcceptanceRequests.map((r) => (
+                  <div key={r.id} className="p-4">
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-900 truncate">{r.locationName}</div>
+                      <div className="text-xs text-gray-500">ID: {r.locationId}</div>
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                      <div className="text-gray-700">
+                        <div className="text-[11px] text-gray-500">İsteyen</div>
+                        <div className="truncate">{r.requestedByUsername}</div>
+                      </div>
+                      <div className="text-gray-700">
+                        <div className="text-[11px] text-gray-500">Tarih</div>
+                        <div className="text-gray-500">{formatDate(r.createdAt)}</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => openAcceptanceEdit(r)}
+                        className="flex-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold"
+                        title="Lokasyonu düzenle ve onayla"
+                      >
+                        Onayla
+                      </button>
+                      <button
+                        onClick={async () => {
+                          const ok = confirm(`\"${r.locationName}\" için isteği reddetmek istiyor musunuz?`);
+                          if (!ok) return;
+                          const success = await rejectAcceptanceRequest({
+                            requestId: r.id,
+                            adminUserId: currentUserId,
+                            adminUsername: currentUsername
+                          });
+                          if (!success) {
+                            setError('Reddetme işlemi başarısız');
+                            return;
+                          }
+                          setSuccessMessage('Reddedildi');
+                          await loadAcceptanceRequests();
+                        }}
+                        className="flex-1 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-semibold"
+                        title="Reddet"
+                      >
+                        Reddet
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

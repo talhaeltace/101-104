@@ -5,14 +5,24 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 
 // Current app version - UPDATE THIS WHEN YOU RELEASE NEW VERSION
-// Store / native version: 2.1.1 (Android versionCode 12)
-const CURRENT_VERSION_CODE = 12;
-const CURRENT_VERSION_NAME = '2.1.1';
+// Android: versionName 2.1.8 (versionCode 24)
+// iOS: MARKETING_VERSION 2.1.8 (build 25)
+const CURRENT_VERSION_NAME = '2.1.8';
+const CURRENT_ANDROID_VERSION_CODE = 24;
+const CURRENT_IOS_BUILD = 25;
+
+// Default store URLs (fallback when Supabase row has no store_url yet)
+const DEFAULT_ANDROID_STORE_URL =
+  'https://play.google.com/store/apps/details?id=com.nelit.project101104&hl=tr';
+const DEFAULT_IOS_STORE_URL =
+  'https://apps.apple.com/tr/app/mapflow/id6755817368?l=tr';
 
 interface AppVersion {
   version_code: number;
   version_name: string;
-  apk_url: string;
+  platform?: 'android' | 'ios' | 'web' | string;
+  store_url?: string | null;
+  apk_url?: string | null;
   release_notes: string | null;
   is_mandatory: boolean;
 }
@@ -23,25 +33,54 @@ export const VersionChecker = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
 
+  const platform = Capacitor.getPlatform();
+
   useEffect(() => {
     checkForUpdates();
   }, []);
 
   const checkForUpdates = async () => {
     try {
-      const { data, error } = await supabase
+      const currentCode =
+        platform === 'ios'
+          ? CURRENT_IOS_BUILD
+          : platform === 'android'
+            ? CURRENT_ANDROID_VERSION_CODE
+            : CURRENT_ANDROID_VERSION_CODE;
+
+      // Prefer platform-aware rows (after migration adds app_version.platform).
+      let data: any = null;
+      let error: any = null;
+
+      const platformQuery = await supabase
         .from('app_version')
         .select('*')
+        .eq('platform', platform)
         .order('version_code', { ascending: false })
         .limit(1)
         .single();
+
+      data = platformQuery.data;
+      error = platformQuery.error;
+
+      // Backward compatibility: if the platform column doesn't exist yet, fall back.
+      if (error && String(error.message || '').includes('platform')) {
+        const fallbackQuery = await supabase
+          .from('app_version')
+          .select('*')
+          .order('version_code', { ascending: false })
+          .limit(1)
+          .single();
+        data = fallbackQuery.data;
+        error = fallbackQuery.error;
+      }
 
       if (error) {
         console.error('Version check failed:', error);
         return;
       }
 
-      if (data && data.version_code > CURRENT_VERSION_CODE) {
+      if (data && data.version_code > currentCode) {
         setNewVersion(data);
         setShowUpdate(true);
       }
@@ -50,14 +89,47 @@ export const VersionChecker = () => {
     }
   };
 
-  const handleDownload = async () => {
-    if (!newVersion?.apk_url) return;
+  const openExternal = (url: string) => {
+    try {
+      // On Capacitor this generally opens the system browser.
+      window.open(url, '_blank');
+    } catch {
+      // ignore
+    }
+  };
 
-    const isNative = Capacitor.getPlatform() !== 'web';
-    
+  const handleDownload = async () => {
+    if (!newVersion) return;
+
+    const fallbackStoreUrl =
+      platform === 'ios'
+        ? DEFAULT_IOS_STORE_URL
+        : platform === 'android'
+          ? DEFAULT_ANDROID_STORE_URL
+          : null;
+
+    // Preferred: store-based update.
+    if (newVersion.store_url || fallbackStoreUrl) {
+      openExternal(newVersion.store_url || fallbackStoreUrl!);
+      return;
+    }
+
+    // iOS: no APK fallback.
+    if (platform === 'ios') {
+      alert('Bu sürüm için App Store bağlantısı tanımlı değil.');
+      return;
+    }
+
+    // Android fallback: direct APK download (legacy behavior).
+    if (!newVersion.apk_url) {
+      alert('Güncelleme bağlantısı bulunamadı.');
+      return;
+    }
+
+    const isNative = platform !== 'web';
+
     if (!isNative) {
-      // Web browser - just open link
-      window.open(newVersion.apk_url, '_blank');
+      openExternal(newVersion.apk_url);
       return;
     }
 
@@ -115,7 +187,7 @@ export const VersionChecker = () => {
         } catch (error) {
           console.error('Save failed:', error);
           alert('❌ Kaydetme başarısız. Tarayıcıdan indirin: ' + newVersion.apk_url);
-          window.open(newVersion.apk_url, '_blank');
+          if (newVersion.apk_url) openExternal(newVersion.apk_url);
         } finally {
           setIsDownloading(false);
         }
@@ -123,7 +195,7 @@ export const VersionChecker = () => {
 
       reader.onerror = () => {
         alert('❌ Okuma hatası. Tarayıcıdan indirin.');
-        window.open(newVersion.apk_url, '_blank');
+        if (newVersion.apk_url) openExternal(newVersion.apk_url);
         setIsDownloading(false);
       };
 
@@ -142,7 +214,7 @@ export const VersionChecker = () => {
     } catch (error) {
       console.error('Download error:', error);
       alert('❌ İndirme başarısız. Tarayıcıdan deneyin.');
-      window.open(newVersion.apk_url, '_blank');
+      if (newVersion.apk_url) openExternal(newVersion.apk_url);
       setIsDownloading(false);
     }
   };
@@ -156,6 +228,13 @@ export const VersionChecker = () => {
   };
 
   if (!showUpdate || !newVersion) return null;
+
+  const updateButtonLabel =
+    platform === 'ios'
+      ? 'App Store\'da Güncelle'
+      : platform === 'android'
+        ? 'Google Play\'de Güncelle'
+        : 'Güncellemeyi Aç';
 
   return (
     <div
@@ -305,7 +384,7 @@ export const VersionChecker = () => {
           ) : (
             <>
               <Download className="w-5 h-5" />
-              Güncellemeyi İndir ve Yükle
+              {updateButtonLabel}
             </>
           )}
         </button>

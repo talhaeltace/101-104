@@ -139,7 +139,7 @@ const ActivityWidget: React.FC<Props> = ({ lastUpdated, activities, inline, full
           )}
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+        <div className="flex flex-wrap gap-2">
           {[
             { id: 'all', label: 'Tümü' },
             { id: 'login', label: 'Giriş/Çıkış' },
@@ -212,7 +212,7 @@ const ActivityWidget: React.FC<Props> = ({ lastUpdated, activities, inline, full
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-3 w-[380px] bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-200 origin-top-right">
+        <div className="absolute right-0 mt-3 w-[min(380px,calc(100vw-2rem))] bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-200 origin-top-right">
           <Content />
         </div>
       )}

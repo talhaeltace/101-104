@@ -7,6 +7,16 @@
 	--safe-area-inset-top: env(safe-area-inset-top, 0px);
 }
 
+html, body {
+	width: 100%;
+	overflow-x: hidden;
+}
+
+#root {
+	width: 100%;
+	overflow-x: hidden;
+}
+
 body {
 	padding-top: var(--safe-area-inset-top);
 	@apply font-sans;
