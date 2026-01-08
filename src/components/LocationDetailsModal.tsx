@@ -21,6 +21,11 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
   useBodyScrollLock(isOpen);
 
   const canEditLocation = (typeof canEdit === 'boolean' ? canEdit : !!(isAdmin || isEditor)) && !isViewer;
+
+  const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
+  const isMinimalDirectorateUI =
+    normalizeDirectorateField(location.brand) === 'BÖLGE' &&
+    normalizeDirectorateField(location.model) === 'MÜDÜRLÜK';
   
   const mapsUrl =
     location?.coordinates && location.coordinates.length === 2 && location.coordinates[0] != null && location.coordinates[1] != null
@@ -158,6 +163,7 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
           )}
 
           {/* System Status */}
+          {!isMinimalDirectorateUI && (
           <div className="mb-6">
             <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">Sistem Durumu</h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
@@ -305,8 +311,10 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
               </div>
             </div>
           </div>
+          )}
 
           {/* Equipment Grid */}
+          {!isMinimalDirectorateUI && (
           <div>
             <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">Ekipman Detayları</h3>
             <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
@@ -332,6 +340,7 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
               ))}
             </div>
           </div>
+          )}
         </div>
 
         {/* Footer */}

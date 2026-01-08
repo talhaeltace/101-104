@@ -8,6 +8,14 @@ interface LocationStatsProps {
 }
 
 const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegionLocations }) => {
+  const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
+  const isDirectorateLocation = (loc: Location) =>
+    normalizeDirectorateField((loc as any).brand) === 'BÖLGE' &&
+    normalizeDirectorateField((loc as any).model) === 'MÜDÜRLÜK';
+
+  const metricLocations = locations.filter(loc => !isDirectorateLocation(loc));
+  const metricSelectedRegionLocations = selectedRegionLocations.filter(loc => !isDirectorateLocation(loc));
+
   const sumKg = (locs: Location[], predicate: (loc: Location) => boolean) =>
     locs.reduce((sum, loc) => {
       if (!predicate(loc)) return sum;
@@ -19,12 +27,12 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
     locs.reduce((sum, loc) => (predicate(loc) ? sum + 1 : sum), 0);
 
   // Tüm bölgeler için istatistikler
-  const activeCount = locations.filter(loc => loc.details.isActive).length;
-  const configuredCount = locations.filter(loc => loc.details.isConfigured).length;
-  const installedCount = locations.filter(loc => !!loc.details.isInstalled).length;
+  const activeCount = metricLocations.filter(loc => loc.details.isActive).length;
+  const configuredCount = metricLocations.filter(loc => loc.details.isConfigured).length;
+  const installedCount = metricLocations.filter(loc => !!loc.details.isInstalled).length;
   // NOTE: Total card access should be per-location (2-door should NOT increase total).
-  const cardAccessCount = countKgLocations(locations, loc => !!loc.details.hasCardAccess);
-  const acceptedCount = locations.filter(loc => !!loc.details.isAccepted).length;
+  const cardAccessCount = countKgLocations(metricLocations, loc => !!loc.details.hasCardAccess);
+  const acceptedCount = metricLocations.filter(loc => !!loc.details.isAccepted).length;
 
   const getPlannedRtuCount = (loc: Location) => {
     const eq = loc.details?.equipment;
@@ -36,8 +44,8 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
   };
 
   // RTU counts are unit-based (rtuCount) per the requested logic.
-  const rtuInstalled = locations.reduce((sum, loc) => sum + (loc.details.hasRTU ? getPlannedRtuCount(loc) : 0), 0);
-  const rtuTodo = locations.reduce((sum, loc) => {
+  const rtuInstalled = metricLocations.reduce((sum, loc) => sum + (loc.details.hasRTU ? getPlannedRtuCount(loc) : 0), 0);
+  const rtuTodo = metricLocations.reduce((sum, loc) => {
     if (loc.details.hasRTU) return sum;
     const planned = getPlannedRtuCount(loc);
     return sum + planned;
@@ -45,14 +53,14 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
   const rtuTotal = rtuInstalled + rtuTodo;
   
   // Seçili bölge için istatistikler
-  const selectedActiveCount = selectedRegionLocations.filter(loc => loc.details.isActive).length;
-  const selectedConfiguredCount = selectedRegionLocations.filter(loc => loc.details.isConfigured).length;
-  const selectedInstalledCount = selectedRegionLocations.filter(loc => !!loc.details.isInstalled).length;
-  const selectedCardAccessCount = countKgLocations(selectedRegionLocations, loc => !!loc.details.hasCardAccess);
-  const selectedAcceptedCount = selectedRegionLocations.filter(loc => !!loc.details.isAccepted).length;
+  const selectedActiveCount = metricSelectedRegionLocations.filter(loc => loc.details.isActive).length;
+  const selectedConfiguredCount = metricSelectedRegionLocations.filter(loc => loc.details.isConfigured).length;
+  const selectedInstalledCount = metricSelectedRegionLocations.filter(loc => !!loc.details.isInstalled).length;
+  const selectedCardAccessCount = countKgLocations(metricSelectedRegionLocations, loc => !!loc.details.hasCardAccess);
+  const selectedAcceptedCount = metricSelectedRegionLocations.filter(loc => !!loc.details.isAccepted).length;
 
-  const selectedRtuInstalled = selectedRegionLocations.reduce((sum, loc) => sum + (loc.details.hasRTU ? getPlannedRtuCount(loc) : 0), 0);
-  const selectedRtuTodo = selectedRegionLocations.reduce((sum, loc) => {
+  const selectedRtuInstalled = metricSelectedRegionLocations.reduce((sum, loc) => sum + (loc.details.hasRTU ? getPlannedRtuCount(loc) : 0), 0);
+  const selectedRtuTodo = metricSelectedRegionLocations.reduce((sum, loc) => {
     if (loc.details.hasRTU) return sum;
     const planned = getPlannedRtuCount(loc);
     return sum + planned;
@@ -62,8 +70,8 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
   const stats = [
     {
       label: 'Toplam Lokasyon',
-      value: locations.length,
-      selectedValue: selectedRegionLocations.length,
+      value: metricLocations.length,
+      selectedValue: metricSelectedRegionLocations.length,
       icon: MapPin,
       color: 'bg-blue-500',
       textColor: 'text-blue-600',
@@ -116,8 +124,8 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
     },
     {
       label: 'Montajı Yapılmış (Kartlı geçiş)',
-      value: sumKg(locations, loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess),
-      selectedValue: sumKg(selectedRegionLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess),
+      value: sumKg(metricLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess),
+      selectedValue: sumKg(metricSelectedRegionLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess),
       icon: CreditCard,
       color: 'bg-teal-500',
       textColor: 'text-teal-600',
@@ -125,8 +133,8 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
     },
     {
       label: 'Devreye Alınmış (Kartlı geçiş)',
-      value: sumKg(locations, loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess),
-      selectedValue: sumKg(selectedRegionLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess),
+      value: sumKg(metricLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess),
+      selectedValue: sumKg(metricSelectedRegionLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess),
       icon: TrendingUp,
       color: 'bg-cyan-500',
       textColor: 'text-cyan-600',
@@ -161,8 +169,8 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
     },
     {
       label: 'Tamamlanacak',
-      value: locations.length - activeCount,
-      selectedValue: selectedRegionLocations.length - selectedActiveCount,
+      value: metricLocations.length - activeCount,
+      selectedValue: metricSelectedRegionLocations.length - selectedActiveCount,
       icon: Zap,
       color: 'bg-orange-500',
       textColor: 'text-orange-600',
@@ -179,8 +187,8 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 mb-6">
       {stats.map((stat, index) => {
-        const totalPercentage = getPercentage(stat.value, locations.length);
-        const selectedPercentage = getPercentage(stat.selectedValue, selectedRegionLocations.length);
+        const totalPercentage = getPercentage(stat.value, metricLocations.length);
+        const selectedPercentage = getPercentage(stat.selectedValue, metricSelectedRegionLocations.length);
         return (
           <div 
             key={index} 

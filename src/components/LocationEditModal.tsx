@@ -27,12 +27,22 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
   onDelete
 }) => {
   const [editedLocation, setEditedLocation] = useState<Location>(location);
+  const [isDirectorateMode, setIsDirectorateMode] = useState(false);
+
+  const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
+  const isDirectorateLocation =
+    normalizeDirectorateField(editedLocation.brand) === 'BÖLGE' &&
+    normalizeDirectorateField(editedLocation.model) === 'MÜDÜRLÜK';
+
+  // In create mode this is a UI toggle; in edit/details it is derived from the saved record.
+  const isMinimalDirectorateUI = (isCreate && isDirectorateMode) || (!isCreate && isDirectorateLocation);
 
   useBodyScrollLock(isOpen);
 
   // Location prop'u değiştiğinde state'i güncelle
   useEffect(() => {
     setEditedLocation(location);
+    setIsDirectorateMode(false);
   }, [location]);
 
   if (!isOpen) return null;
@@ -88,7 +98,29 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
   const handleSave = () => {
     // onSave may be async in the parent; support both by checking for then
     try {
-      const payload = isEditor ? { ...location, note: editedLocation.note } : editedLocation;
+      if (!isEditor) {
+        const nameOk = String(editedLocation.name || '').trim().length > 0;
+        const centerOk = String(editedLocation.center || '').trim().length > 0;
+        const lat = editedLocation.coordinates?.[0];
+        const lng = editedLocation.coordinates?.[1];
+        const coordsOk = Number.isFinite(lat) && Number.isFinite(lng);
+
+        if (!nameOk || !centerOk || !coordsOk) {
+          alert('Lütfen Lokasyon Adı, Konum ve Koordinatlar alanlarını doğru doldurun.');
+          return;
+        }
+      }
+
+      let payload: Location = isEditor ? ({ ...location, note: editedLocation.note } as Location) : editedLocation;
+
+      if (isCreate && !isEditor && isDirectorateMode) {
+        payload = {
+          ...payload,
+          // Ensure DB-required fields are populated without extra inputs
+          brand: payload.brand?.trim() ? payload.brand : 'BÖLGE',
+          model: payload.model?.trim() ? payload.model : 'MÜDÜRLÜK'
+        };
+      }
       const res = onSave(payload as Location) as any;
       if (res && typeof res.then === 'function') {
         res.then(() => onClose());
@@ -185,6 +217,22 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
           {/* Temel Bilgiler */}
           <div>
             <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4">Temel Bilgiler</h3>
+            {isCreate && !isEditor && (
+              <label className="mb-4 flex items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={isDirectorateMode}
+                  onChange={(e) => {
+                    setIsDirectorateMode(e.target.checked);
+                  }}
+                  className="h-4 w-4"
+                />
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-gray-900">Bölge Müdürlüğü (Merkez)</div>
+                  <div className="text-xs text-gray-600">İşaretlersen sadece temel alanlar gösterilir.</div>
+                </div>
+              </label>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-wide mb-1.5">
@@ -200,7 +248,7 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
               </div>
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-wide mb-1.5">
-                  Merkez
+                  Konum
                 </label>
                 <input
                   type="text"
@@ -257,122 +305,130 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
                   placeholder="Bu lokasyon için kısa bir not ekleyin..."
                 />
               </div>
-              <div>
-                <label className="block text-xs text-gray-500 uppercase tracking-wide mb-1.5">
-                  Marka
-                </label>
-                <input
-                  type="text"
-                  value={editedLocation.brand}
-                  onChange={(e) => handleInputChange('brand', e.target.value)}
-                  disabled={isEditor}
-                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white transition-colors disabled:opacity-50"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 uppercase tracking-wide mb-1.5">
-                  Model
-                </label>
-                <input
-                  type="text"
-                  value={editedLocation.model}
-                  onChange={(e) => handleInputChange('model', e.target.value)}
-                  disabled={isEditor}
-                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white transition-colors disabled:opacity-50"
-                />
-              </div>
+              {!isMinimalDirectorateUI && (
+                <>
+                  <div>
+                    <label className="block text-xs text-gray-500 uppercase tracking-wide mb-1.5">
+                      Marka
+                    </label>
+                    <input
+                      type="text"
+                      value={editedLocation.brand}
+                      onChange={(e) => handleInputChange('brand', e.target.value)}
+                      disabled={isEditor}
+                      className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white transition-colors disabled:opacity-50"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 uppercase tracking-wide mb-1.5">
+                      Model
+                    </label>
+                    <input
+                      type="text"
+                      value={editedLocation.model}
+                      onChange={(e) => handleInputChange('model', e.target.value)}
+                      disabled={isEditor}
+                      className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white transition-colors disabled:opacity-50"
+                    />
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
-          {/* Sistem Durumu */}
-          <div>
-            <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4">Sistem Durumu</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-              {statusItems.map((item) => (
-                <label 
-                  key={item.id}
-                  className={`relative flex items-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all ${
-                    item.checked ? item.activeBg : 'bg-gray-50 border-gray-200 hover:border-gray-300'
-                  } ${isEditor ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={item.checked}
-                    onChange={(e) => handleDetailsChange(item.id, e.target.checked)}
-                    disabled={isEditor}
-                    className="sr-only"
-                  />
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                    item.checked ? item.activeColor : 'bg-gray-300'
-                  }`}>
-                    <item.icon className="w-4 h-4 text-white" />
-                  </div>
-                  <span className={`text-xs font-medium leading-tight ${
-                    item.checked ? 'text-gray-900' : 'text-gray-500'
-                  }`}>
-                    {item.label}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </div>
+          {!isMinimalDirectorateUI && (
+            <>
+              {/* Sistem Durumu */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4">Sistem Durumu</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                  {statusItems.map((item) => (
+                    <label 
+                      key={item.id}
+                      className={`relative flex items-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                        item.checked ? item.activeBg : 'bg-gray-50 border-gray-200 hover:border-gray-300'
+                      } ${isEditor ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={item.checked}
+                        onChange={(e) => handleDetailsChange(item.id, e.target.checked)}
+                        disabled={isEditor}
+                        className="sr-only"
+                      />
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                        item.checked ? item.activeColor : 'bg-gray-300'
+                      }`}>
+                        <item.icon className="w-4 h-4 text-white" />
+                      </div>
+                      <span className={`text-xs font-medium leading-tight ${
+                        item.checked ? 'text-gray-900' : 'text-gray-500'
+                      }`}>
+                        {item.label}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
 
-          {/* Ekipman Detayları */}
-          <div>
-            <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4">Ekipman Detayları</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-              {equipmentItems.map((item) => (
-                <div 
-                  key={item.field}
-                  className={`p-3 rounded-xl border-2 text-center transition-all ${
-                    item.value > 0 ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50 border-gray-100'
-                  }`}
-                >
-                  <div className={`w-8 h-8 mx-auto mb-2 rounded-lg flex items-center justify-center ${
-                    item.value > 0 ? 'bg-indigo-500' : 'bg-gray-300'
-                  }`}>
-                    <item.icon className="w-4 h-4 text-white" />
-                  </div>
-                  <input
-                    type="number"
-                    min="0"
-                    value={item.value}
-                    onChange={(e) => handleEquipmentChange(item.field, parseInt(e.target.value) || 0)}
-                    disabled={isEditor}
-                    className="w-full text-center text-xl font-bold bg-transparent border-0 focus:ring-0 text-gray-900 disabled:opacity-50"
-                  />
-                  <p className="text-xs text-gray-500 mt-1 leading-tight">{item.label}</p>
-                </div>
-              ))}
-              
-              {/* Transformatör Merkezi Tipi - Text input */}
-              <div className="p-3 rounded-xl border-2 bg-gray-50 border-gray-100">
-                <div className="w-8 h-8 mx-auto mb-2 rounded-lg flex items-center justify-center bg-gray-300">
-                  <Settings className="w-4 h-4 text-white" />
-                </div>
-                <input
-                  type="text"
-                  value={editedLocation.details.equipment.transformerCenterType || ''}
-                  onChange={(e) =>
-                    setEditedLocation(prev => ({
-                      ...prev,
-                      details: {
-                        ...prev.details,
-                        equipment: {
-                          ...prev.details.equipment,
-                          transformerCenterType: e.target.value
-                        }
+              {/* Ekipman Detayları */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4">Ekipman Detayları</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                  {equipmentItems.map((item) => (
+                    <div 
+                      key={item.field}
+                      className={`p-3 rounded-xl border-2 text-center transition-all ${
+                        item.value > 0 ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50 border-gray-100'
+                      }`}
+                    >
+                      <div className={`w-8 h-8 mx-auto mb-2 rounded-lg flex items-center justify-center ${
+                        item.value > 0 ? 'bg-indigo-500' : 'bg-gray-300'
+                      }`}>
+                        <item.icon className="w-4 h-4 text-white" />
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        value={item.value}
+                        onChange={(e) => handleEquipmentChange(item.field, parseInt(e.target.value) || 0)}
+                        disabled={isEditor}
+                        className="w-full text-center text-xl font-bold bg-transparent border-0 focus:ring-0 text-gray-900 disabled:opacity-50"
+                      />
+                      <p className="text-xs text-gray-500 mt-1 leading-tight">{item.label}</p>
+                    </div>
+                  ))}
+                  
+                  {/* Transformatör Merkezi Tipi - Text input */}
+                  <div className="p-3 rounded-xl border-2 bg-gray-50 border-gray-100">
+                    <div className="w-8 h-8 mx-auto mb-2 rounded-lg flex items-center justify-center bg-gray-300">
+                      <Settings className="w-4 h-4 text-white" />
+                    </div>
+                    <input
+                      type="text"
+                      value={editedLocation.details.equipment.transformerCenterType || ''}
+                      onChange={(e) =>
+                        setEditedLocation(prev => ({
+                          ...prev,
+                          details: {
+                            ...prev.details,
+                            equipment: {
+                              ...prev.details.equipment,
+                              transformerCenterType: e.target.value
+                            }
+                          }
+                        }))
                       }
-                    }))
-                  }
-                  disabled={isEditor}
-                  className="w-full text-center text-sm font-medium bg-transparent border-0 focus:ring-0 text-gray-900 disabled:opacity-50"
-                  placeholder="—"
-                />
-                <p className="text-xs text-gray-500 mt-1 leading-tight">Merkez Tipi</p>
+                      disabled={isEditor}
+                      className="w-full text-center text-sm font-medium bg-transparent border-0 focus:ring-0 text-gray-900 disabled:opacity-50"
+                      placeholder="—"
+                    />
+                    <p className="text-xs text-gray-500 mt-1 leading-tight">Merkez Tipi</p>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            </>
+          )}
         </div>
 
         {/* Footer */}

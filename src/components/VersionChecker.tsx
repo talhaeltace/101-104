@@ -8,8 +8,8 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 // Android: versionName 2.1.8 (versionCode 24)
 // iOS: MARKETING_VERSION 2.1.8 (build 25)
 const CURRENT_VERSION_NAME = '2.1.8';
-const CURRENT_ANDROID_VERSION_CODE = 24;
-const CURRENT_IOS_BUILD = 25;
+const CURRENT_ANDROID_VERSION_CODE = 25;
+const CURRENT_IOS_BUILD = 26;
 
 // Default store URLs (fallback when Supabase row has no store_url yet)
 const DEFAULT_ANDROID_STORE_URL =

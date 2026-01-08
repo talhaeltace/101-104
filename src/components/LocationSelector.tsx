@@ -119,6 +119,11 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     }
   }, [isFilterExpanded]);
 
+  const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
+  const isDirectorateLocation = (loc: Location) =>
+    normalizeDirectorateField((loc as any).brand) === 'BÖLGE' &&
+    normalizeDirectorateField((loc as any).model) === 'MÜDÜRLÜK';
+
 
   // If an external searchTerm is provided (header search), auto-expand the selector
   // after the user pauses typing (debounced). This prevents layout thrash / scroll
@@ -130,8 +135,13 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     return () => clearTimeout(t);
   }, [searchTermProp]);
 
-  const getStatus = (details: Location['details']) => {
+  const getStatus = (location: Location) => {
     // New scheme (requested): Accepted > Installed > Started(Ring) > Untouched
+    if (isDirectorateLocation(location)) {
+      return { label: 'Bölge Müdürlüğü', colorClass: 'text-slate-600', dotClass: 'bg-slate-400' };
+    }
+
+    const details = location.details;
     if (details.isAccepted) {
       return { label: 'Kabul Edildi', colorClass: 'text-green-600', dotClass: 'bg-green-500' };
     }
@@ -156,6 +166,12 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   const isRtuLocation = (loc: Location) => getPlannedRtuCount(loc) > 0 || !!loc.details?.hasRTU;
 
   const matchesOneStatus = (filterKey: StatusFilterKey, location: Location) => {
+    // Directorate locations are navigation/map items; they should not affect operational filters.
+    // Allow 'notes' so they can still be found when needed.
+    if (isDirectorateLocation(location)) {
+      return filterKey === 'notes' && !!(location.note && String(location.note).trim().length > 0);
+    }
+
     switch (filterKey) {
       case 'active':
         return !!(location.details.isActive && location.details.isConfigured);
@@ -296,7 +312,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
         {g.items.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
             {g.items.map(location => {
-              const status = getStatus(location.details);
+              const status = getStatus(location);
               return (
                 <div
                   key={`${g.region.id}-${location.id}`}
@@ -438,7 +454,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
           {filteredLocations.map((location) => {
-            const status = getStatus(location.details);
+            const status = getStatus(location);
             return (
               <div
                 key={location.id}
@@ -683,7 +699,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             </div>
             <div className="flex items-center space-x-2">
               {(() => {
-                const st = getStatus(selectedLocation.details);
+                const st = getStatus(selectedLocation);
                 return (
                   <>
                     <span className={`w-2 h-2 rounded-full ${st.dotClass}`} />

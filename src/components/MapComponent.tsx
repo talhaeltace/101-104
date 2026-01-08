@@ -71,7 +71,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
   const didCenterFollowForIdRef = useRef<string | null>(null);
   const lastUserMapInteractAtRef = useRef<number>(0);
   const lastAutoPanAtRef = useRef<number>(0);
-  const lastMarkerTouchAtRef = useRef<number>(0);
   const didInitialFitRef = useRef<boolean>(false);
   const didFitMarkersForRegionRef = useRef<number | null>(null);
   const [mapReady, setMapReady] = useState<boolean>(false);
@@ -518,6 +517,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
         });
 
         const marker = L.marker(location.coordinates, { icon: customIcon });
+
+        const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
+        const isMinimalDirectorateUI =
+          normalizeDirectorateField((location as any).brand) === 'BÖLGE' &&
+          normalizeDirectorateField((location as any).model) === 'MÜDÜRLÜK';
         
         // Calculate distance from user location
         let distanceText = '';
@@ -536,17 +540,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
           distanceText = `<p style="margin: 4px 0; color: #2563eb; font-size: 14px; font-weight: 600;"><strong>📍 Mesafe:</strong> ${distance.toFixed(2)} km</p>`;
         }
         
-        const popupContent = `
-          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-width: 250px;">
-            <h3 style="font-size: 16px; font-weight: 600; margin: 0 0 12px 0; color: #1f2937; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px;">
-              ${location.name}
-            </h3>
-            <div style="margin-bottom: 10px;">
-              <p style="margin: 4px 0; color: #4b5563; font-size: 14px;"><strong>Merkez:</strong> ${location.center}</p>
-              ${distanceText}
-              <p style="margin: 4px 0; color: #4b5563; font-size: 14px;"><strong>Marka:</strong> ${location.brand}</p>
-              <p style="margin: 4px 0; color: #4b5563; font-size: 14px;"><strong>Model:</strong> ${location.model}</p>
-            </div>
+        const equipmentBlock = isMinimalDirectorateUI
+          ? ''
+          : `
             <div style="margin-bottom: 10px; padding: 8px; background: #f9fafb; border-radius: 6px;">
               <h4 style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #374151;">Ekipman Durumu</h4>
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 11px;">
@@ -568,6 +564,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
                 <span>Transformatör Merkezi: ${location.details.equipment.transformerCenterType}</span>
               </div>
             </div>
+          `;
+
+        const quickTagsBlock = isMinimalDirectorateUI
+          ? ''
+          : `
             <div style="display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0;">
               <span style="padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; background: ${location.details.hasGPS ? '#d1fae5' : '#fee2e2'}; color: ${location.details.hasGPS ? '#065f46' : '#991b1b'};">
                 GPS: ${location.details.hasGPS ? 'Aktif' : 'Pasif'}
@@ -582,6 +583,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
                 Konfig: ${location.details.isConfigured ? 'Yapıldı' : 'Yapılmadı'}
               </span>
             </div>
+          `;
+
+        const statusLineBlock = isMinimalDirectorateUI
+          ? ''
+          : `
             <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #e5e7eb; font-weight: 600;">
               Durum: <span style="color: ${location.details.isAccepted ? '#166534' : (location.details.isInstalled ? '#1d4ed8' : (location.details.isConfigured ? '#92400e' : '#78350f'))};">
                 ${location.details.isAccepted
@@ -593,6 +599,22 @@ const MapComponent: React.FC<MapComponentProps> = ({
                       : 'Hiç Girilmedi'))}
               </span>
             </div>
+          `;
+
+        const popupContent = `
+          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-width: 250px;">
+            <h3 style="font-size: 16px; font-weight: 600; margin: 0 0 12px 0; color: #1f2937; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px;">
+              ${location.name}
+            </h3>
+            <div style="margin-bottom: 10px;">
+              <p style="margin: 4px 0; color: #4b5563; font-size: 14px;"><strong>Merkez:</strong> ${location.center}</p>
+              ${distanceText}
+              <p style="margin: 4px 0; color: #4b5563; font-size: 14px;"><strong>Marka:</strong> ${location.brand}</p>
+              <p style="margin: 4px 0; color: #4b5563; font-size: 14px;"><strong>Model:</strong> ${location.model}</p>
+            </div>
+            ${equipmentBlock}
+            ${quickTagsBlock}
+            ${statusLineBlock}
           </div>
         `;
 
@@ -1376,12 +1398,19 @@ const MapComponent: React.FC<MapComponentProps> = ({
   // - Yellow: başlamış / ring
   // - Blue: kurulum tamam ama kabul yok
   // - Green: kurulum tamam ve resmi kabul
-  const totalShown = (locations || []).length;
-  const acceptedCount = (locations || []).filter(l => !!l.details && !!l.details.isAccepted).length;
-  const installedCount = (locations || []).filter(
+  const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
+  const isDirectorateLocation = (l: any) =>
+    normalizeDirectorateField(l?.brand) === 'BÖLGE' &&
+    normalizeDirectorateField(l?.model) === 'MÜDÜRLÜK';
+
+  const progressLocations = (locations || []).filter(l => !isDirectorateLocation(l));
+
+  const totalShown = progressLocations.length;
+  const acceptedCount = progressLocations.filter(l => !!l.details && !!l.details.isAccepted).length;
+  const installedCount = progressLocations.filter(
     l => !!l.details && !l.details.isAccepted && !!l.details.isInstalled,
   ).length;
-  const startedCount = (locations || []).filter(
+  const startedCount = progressLocations.filter(
     l => !!l.details && !l.details.isAccepted && !l.details.isInstalled && !!l.details.isConfigured,
   ).length;
   const untouchedCount = Math.max(0, totalShown - acceptedCount - installedCount - startedCount);

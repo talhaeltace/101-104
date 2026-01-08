@@ -7,12 +7,31 @@ export const useLocations = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const parseProjectId = (raw: unknown): string | number | undefined => {
+    if (raw === null || raw === undefined) return undefined;
+    const value = String(raw).trim();
+    if (!value) return undefined;
+    if (/^\d+$/.test(value)) return Number(value);
+    return value;
+  };
+
+  const getEnvProjectId = (): string | number | undefined => {
+    try {
+      // Optional: allow deployments where DB enforces locations.project_id NOT NULL
+      return parseProjectId((import.meta as any)?.env?.VITE_PROJECT_ID);
+    } catch {
+      return undefined;
+    }
+  };
+
   // Varsayılan verileri veritabanına kaydet
   const initializeDatabase = useCallback(async () => {
     try {
+      const envProjectId = getEnvProjectId();
       const locationsToInsert = regions.flatMap(region =>
         region.locations.map(location => ({
           id: location.id,
+          ...(envProjectId !== undefined ? { project_id: envProjectId } : {}),
           region_id: region.id,
           name: location.name,
           center: location.center,
@@ -193,7 +212,8 @@ export const useLocations = () => {
 
       if (error) {
         console.error('Güncelleme hatası:', error);
-        setError('Güncelleme sırasında hata oluştu');
+        // Don't trip the global "Varsayılan veriler" fallback screen for mutation errors.
+        alert(`Güncelleme sırasında hata oluştu.\n\n${error.message || ''}`);
         return false;
       }
 
@@ -210,7 +230,7 @@ export const useLocations = () => {
       return true;
     } catch (err) {
       console.error('Beklenmeyen güncelleme hatası:', err);
-      setError('Güncelleme sırasında beklenmeyen hata oluştu');
+      alert('Güncelleme sırasında beklenmeyen hata oluştu.');
       return false;
     }
   };
@@ -218,26 +238,46 @@ export const useLocations = () => {
   // Lokasyon oluştur
   const createLocation = async (newLocation: Location, regionId: number) => {
     try {
+      const slugify = (value: string) => {
+        const map: Record<string, string> = {
+          'ç': 'c', 'Ç': 'c',
+          'ğ': 'g', 'Ğ': 'g',
+          'ı': 'i', 'İ': 'i',
+          'ö': 'o', 'Ö': 'o',
+          'ş': 's', 'Ş': 's',
+          'ü': 'u', 'Ü': 'u'
+        };
+        return String(value || '')
+          .split('')
+          .map(ch => (map[ch] ?? ch))
+          .join('')
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9\s-]/g, '')
+          .replace(/\s+/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '');
+      };
+
+      const baseId = newLocation?.id && String(newLocation.id).trim().length > 0
+        ? String(newLocation.id).trim()
+        : (() => {
+            const namePart = slugify(newLocation?.name || 'lokasyon') || 'lokasyon';
+            return `${namePart}-${regionId}-${Date.now()}`;
+          })();
+
       const insertObj: any = {
-        id: newLocation.id,
+        id: baseId,
         region_id: regionId,
         name: newLocation.name,
         center: newLocation.center,
         latitude: newLocation.coordinates[0],
         longitude: newLocation.coordinates[1],
-  address: newLocation.address || null,
-  note: newLocation.note || null,
         brand: newLocation.brand,
         model: newLocation.model,
         has_gps: newLocation.details.hasGPS,
         has_rtu: newLocation.details.hasRTU,
         has_panos: newLocation.details.hasPanos,
-    is_accepted: newLocation.details.isAccepted || false,
-    has_card_access: newLocation.details.hasCardAccess || false,
-  is_installed_card_access: newLocation.details.isInstalledCardAccess || false,
-  is_active_card_access: newLocation.details.isActiveCardAccess || false,
-  is_two_door_card_access: newLocation.details.isTwoDoorCardAccess || false,
-  is_installed: newLocation.details.isInstalled || false,
         is_active: newLocation.details.isActive,
         is_configured: newLocation.details.isConfigured,
         security_firewall: newLocation.details.equipment.securityFirewall,
@@ -259,15 +299,103 @@ export const useLocations = () => {
         created_at: new Date().toISOString()
       };
 
-      const { data, error } = await supabase
-        .from('locations')
-        .insert([insertObj])
-        .select()
-        .single();
+      const resolveProjectIdFromDb = async (): Promise<string | number | undefined> => {
+        // Try to copy project_id from an existing row to satisfy NOT NULL constraints.
+        // If the column doesn't exist, safely return undefined.
+        try {
+          const tryQuery = async (filterRegion: boolean) => {
+            let q = supabase
+              .from('locations')
+              .select('project_id')
+              .limit(1);
+            if (filterRegion) q = q.eq('region_id', regionId);
+            const { data, error } = await q.maybeSingle();
+            if (error) {
+              const msg = String((error as any).message || '').toLowerCase();
+              if (msg.includes('does not exist') && msg.includes('project_id')) return undefined;
+              if (msg.includes('column') && msg.includes('project_id')) return undefined;
+              return undefined;
+            }
+            return parseProjectId((data as any)?.project_id);
+          };
+
+          return (await tryQuery(true)) ?? (await tryQuery(false));
+        } catch {
+          return undefined;
+        }
+      };
+
+      // Optional columns (may not exist on older DB schemas)
+      if (newLocation.address && String(newLocation.address).trim().length > 0) {
+        insertObj.address = String(newLocation.address).trim();
+      }
+      if (newLocation.note && String(newLocation.note).trim().length > 0) {
+        insertObj.note = String(newLocation.note).trim();
+      }
+      if (typeof newLocation.details.isAccepted === 'boolean') {
+        insertObj.is_accepted = newLocation.details.isAccepted;
+      }
+      if (typeof newLocation.details.hasCardAccess === 'boolean') {
+        insertObj.has_card_access = newLocation.details.hasCardAccess;
+      }
+      if (typeof newLocation.details.isInstalledCardAccess === 'boolean') {
+        insertObj.is_installed_card_access = newLocation.details.isInstalledCardAccess;
+      }
+      if (typeof newLocation.details.isActiveCardAccess === 'boolean') {
+        insertObj.is_active_card_access = newLocation.details.isActiveCardAccess;
+      }
+      if (typeof newLocation.details.isTwoDoorCardAccess === 'boolean') {
+        insertObj.is_two_door_card_access = newLocation.details.isTwoDoorCardAccess;
+      }
+      if (typeof newLocation.details.isInstalled === 'boolean') {
+        insertObj.is_installed = newLocation.details.isInstalled;
+      }
+
+      const runInsert = async (obj: any) => {
+        return await supabase
+          .from('locations')
+          .insert([obj])
+          .select()
+          .single();
+      };
+
+      let { data, error } = await runInsert(insertObj);
+
+      // If DB enforces project_id NOT NULL, try to auto-fill it and retry.
+      if (error) {
+        const msg = String((error as any).message || '').toLowerCase();
+        if (msg.includes('project_id') && msg.includes('null value') && msg.includes('not-null')) {
+          const projectId = (await resolveProjectIdFromDb()) ?? getEnvProjectId();
+          if (projectId !== undefined) {
+            insertObj.project_id = projectId;
+            ({ data, error } = await runInsert(insertObj));
+          } else {
+            alert(
+              'Lokasyon oluşturulamadı. Veritabanı "project_id" alanını zorunlu istiyor ama uygulama bu değeri bilmiyor.\n\n' +
+              'Çözüm: Mevcut kayıtlarda project_id olduğundan emin olun veya build ortamına VITE_PROJECT_ID ekleyin.'
+            );
+          }
+        }
+      }
+
+      // Backward compatibility: DB might not have newer optional columns yet.
+      if (error && String((error as any).message || '').toLowerCase().includes('does not exist')) {
+        const legacyObj: any = { ...insertObj };
+        delete legacyObj.address;
+        delete legacyObj.note;
+        delete legacyObj.is_accepted;
+        delete legacyObj.has_card_access;
+        delete legacyObj.is_installed_card_access;
+        delete legacyObj.is_active_card_access;
+        delete legacyObj.is_two_door_card_access;
+        delete legacyObj.is_installed;
+        ({ data, error } = await runInsert(legacyObj));
+      }
 
       if (error) {
         console.error('Oluşturma hatası:', error);
-        setError('Lokasyon oluşturulurken hata oluştu');
+        // Don't trip the global "Varsayılan veriler" fallback screen for mutation errors.
+        alert(`Lokasyon oluşturulurken hata oluştu.\n\n${error.message || ''}`);
         return null;
       }
 
@@ -329,7 +457,7 @@ export const useLocations = () => {
       return locationObj;
     } catch (err) {
       console.error('Beklenmeyen oluşturma hatası:', err);
-      setError('Lokasyon oluşturulurken beklenmeyen hata oluştu');
+      alert('Lokasyon oluşturulurken beklenmeyen hata oluştu.');
       return null;
     }
   };
@@ -344,7 +472,8 @@ export const useLocations = () => {
 
       if (error) {
         console.error('Silme hatası:', error);
-        setError('Lokasyon silinirken hata oluştu');
+        // Don't trip the global "Varsayılan veriler" fallback screen for mutation errors.
+        alert(`Lokasyon silinirken hata oluştu.\n\n${error.message || ''}`);
         return false;
       }
 
@@ -355,7 +484,7 @@ export const useLocations = () => {
       return true;
     } catch (err) {
       console.error('Beklenmeyen silme hatası:', err);
-      setError('Lokasyon silinirken beklenmeyen hata oluştu');
+      alert('Lokasyon silinirken beklenmeyen hata oluştu.');
       return false;
     }
   };

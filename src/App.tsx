@@ -2676,12 +2676,19 @@ function App() {
                     {/* Resmi Kabul Oranı (haritanın altında sabit) */}
                     <div className="bg-white rounded-b-lg shadow-md border border-gray-200 border-t-0 px-3 py-3">
                       {(() => {
-                        const totalShown = (currentLocations || []).length;
-                        const acceptedCount = (currentLocations || []).filter(l => !!l.details && !!l.details.isAccepted).length;
-                        const installedCount = (currentLocations || []).filter(
+                        const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
+                        const isDirectorateLocation = (l: any) =>
+                          normalizeDirectorateField(l?.brand) === 'BÖLGE' &&
+                          normalizeDirectorateField(l?.model) === 'MÜDÜRLÜK';
+
+                        const progressLocations = (currentLocations || []).filter(l => !isDirectorateLocation(l));
+
+                        const totalShown = progressLocations.length;
+                        const acceptedCount = progressLocations.filter(l => !!l.details && !!l.details.isAccepted).length;
+                        const installedCount = progressLocations.filter(
                           l => !!l.details && !l.details.isAccepted && !!l.details.isInstalled,
                         ).length;
-                        const startedCount = (currentLocations || []).filter(
+                        const startedCount = progressLocations.filter(
                           l => !!l.details && !l.details.isAccepted && !l.details.isInstalled && !!l.details.isConfigured,
                         ).length;
                         const untouchedCount = Math.max(0, totalShown - acceptedCount - installedCount - startedCount);
