@@ -1,8 +1,4 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import * as XLSX from 'xlsx';
-import { saveAs } from 'file-saver';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import { blobToBase64, saveAndShareFile, saveArrayBufferAndShare } from './lib/nativeFiles';
@@ -1186,31 +1182,53 @@ function App() {
     };
   };
 
-  const handleExportExcel = () => {
-    const wb = XLSX.utils.book_new();
+  const handleExportExcel = async () => {
+    try {
+      const [XLSX, fileSaver] = await Promise.all([
+        import('xlsx'),
+        import('file-saver')
+      ]);
+
+      const saveAs: any = (fileSaver as any).saveAs;
+      const utils: any = (XLSX as any).utils;
+      const write: any = (XLSX as any).write;
+
+      if (!utils || !write) {
+        throw new Error('XLSX utils not available');
+      }
+
+      const wb = utils.book_new();
 
     if (selectedRegion === 0) {
       locations.forEach(region => {
         const rows = region.locations.map(loc => locationToExportRow(loc, { id: region.id, name: region.name }));
         const sheetName = `${region.id}. Bölge`;
-        const ws = XLSX.utils.json_to_sheet(rows);
-        XLSX.utils.book_append_sheet(wb, ws, sheetName.substring(0, 31));
+        const ws = utils.json_to_sheet(rows);
+        utils.book_append_sheet(wb, ws, sheetName.substring(0, 31));
       });
     } else {
       const rows = currentLocations.map(loc => locationToExportRow(loc, currentRegion ? { id: currentRegion.id, name: currentRegion.name } : null));
-      const ws = XLSX.utils.json_to_sheet(rows);
-      XLSX.utils.book_append_sheet(wb, ws, currentRegion ? `${currentRegion.id}. Bölge`.substring(0,31) : 'Lokasyonlar');
+      const ws = utils.json_to_sheet(rows);
+      utils.book_append_sheet(wb, ws, currentRegion ? `${currentRegion.id}. Bölge`.substring(0,31) : 'Lokasyonlar');
     }
 
-    const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const excelArray: any = write(wb, { bookType: 'xlsx', type: 'array' });
+    const excelBuffer: ArrayBuffer = excelArray instanceof ArrayBuffer ? excelArray : excelArray?.buffer;
+    if (!excelBuffer) throw new Error('Could not create Excel buffer');
+
     const regionLabel = selectedRegion === 0 ? 'tum_bolgeler' : (currentRegion?.name ?? String(selectedRegion));
     const safeLabel = String(regionLabel).replace(/\s+/g, '_');
     // If running as native app use Capacitor filesystem + share, else fallback to file-saver
     if ((Capacitor as any).getPlatform && (Capacitor as any).getPlatform() !== 'web') {
       // write array buffer directly
-      saveArrayBufferAndShare(`lokasyonlar_${safeLabel}.xlsx`, excelBuffer.buffer).catch(err => console.warn('native excel save failed', err));
+      await saveArrayBufferAndShare(`lokasyonlar_${safeLabel}.xlsx`, excelBuffer);
     } else {
+      if (typeof saveAs !== 'function') throw new Error('saveAs not available');
       saveAs(new Blob([excelBuffer], { type: 'application/octet-stream' }), `lokasyonlar_${safeLabel}.xlsx`);
+    }
+    } catch (err) {
+      console.error('Excel export failed', err);
+      alert('Excel dışa aktarımı sırasında hata oluştu.');
     }
   };
 
@@ -1643,8 +1661,26 @@ function App() {
   // to prevent any state resets or logout triggers when switching tabs or backgrounding the app.
 
   const handleExportPDF = async () => {
-  // A4 portrait with vertical layout (one location as key/value rows) so everything fits on printouts.
-  const doc: any = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+    // Lazy-load PDF libs so they don't bloat startup bundles (and reduce memory pressure on iOS).
+    let jsPDFCtor: any;
+    let autoTableFn: any;
+    try {
+      const [jspdfMod, autoTableMod] = await Promise.all([
+        import('jspdf'),
+        import('jspdf-autotable')
+      ]);
+      jsPDFCtor = (jspdfMod as any).jsPDF ?? (jspdfMod as any).default;
+      autoTableFn = (autoTableMod as any).default ?? (autoTableMod as any).autoTable ?? autoTableMod;
+      if (!jsPDFCtor || typeof jsPDFCtor !== 'function') throw new Error('jsPDF not available');
+      if (!autoTableFn || typeof autoTableFn !== 'function') throw new Error('autoTable not available');
+    } catch (err) {
+      console.error('PDF libs failed to load', err);
+      alert('PDF dışa aktarımı başlatılamadı.');
+      return;
+    }
+
+    // A4 portrait with vertical layout (one location as key/value rows) so everything fits on printouts.
+    const doc: any = new jsPDFCtor({ unit: 'pt', format: 'a4', orientation: 'portrait' });
 
     try {
       // Prefer internet font, fallback to bundled font
@@ -1767,7 +1803,7 @@ function App() {
           // Allow more vertical fill when there are fewer rows.
           const minRowHeight = Math.max(12, Math.min(44, targetRowHeight));
 
-          autoTable(doc as any, {
+          autoTableFn(doc as any, {
             ...commonAutoTableOpts,
             columns: columnsKv,
             body,
