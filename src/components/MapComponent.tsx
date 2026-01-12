@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Location } from '../data/regions';
-import '../../public/map.css';
+import 'leaflet/dist/leaflet.css';
+import markerIcon2xUrl from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIconUrl from 'leaflet/dist/images/marker-icon.png';
+import markerShadowUrl from 'leaflet/dist/images/marker-shadow.png';
 
 
 interface MapComponentProps {
@@ -74,6 +77,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
   const didInitialFitRef = useRef<boolean>(false);
   const didFitMarkersForRegionRef = useRef<number | null>(null);
   const [mapReady, setMapReady] = useState<boolean>(false);
+  const [mapInitError, setMapInitError] = useState<string | null>(null);
   // whether the deployment overlay is expanded. On small screens we'll collapse it by default.
   const [overlayOpen, setOverlayOpen] = useState<boolean>(true);
   const [svgAcceptedPopup, setSvgAcceptedPopup] = useState<null | {
@@ -256,33 +260,30 @@ const MapComponent: React.FC<MapComponentProps> = ({
       // Check if the DOM element already has a Leaflet map initialized
       if (mapInstance.current) return;
 
-      // Leaflet'i dinamik olarak yükle
-      const L = (await import('leaflet')) as any;
-      leafletRef.current = L;
-      // Keep global for any legacy usages (safe fallback)
-      try { (window as any).L = L; } catch { /* ignore */ }
+      try {
+        setMapInitError(null);
 
-      // CSS'i yükle
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-      document.head.appendChild(link);
+        // Leaflet'i dinamik olarak yükle
+        const L = (await import('leaflet')) as any;
+        leafletRef.current = L;
+        // Keep global for any legacy usages (safe fallback)
+        try { (window as any).L = L; } catch { /* ignore */ }
 
-      // Icon sorununu çöz
-      delete (L.Icon.Default.prototype as any)._getIconUrl;
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-      });
+        // Icon sorununu çöz (local assets; no network dependency)
+        delete (L.Icon.Default.prototype as any)._getIconUrl;
+        L.Icon.Default.mergeOptions({
+          iconRetinaUrl: markerIcon2xUrl,
+          iconUrl: markerIconUrl,
+          shadowUrl: markerShadowUrl,
+        });
 
-      // Haritayı başlat
-      // - closePopupOnClick: false => map click doesn't immediately close a just-opened marker popup
-      // - tap: false => avoids "first tap focuses, second tap clicks" on some mobile browsers
-      mapInstance.current = L.map(mapRef.current, {
-        closePopupOnClick: false,
-        tap: false
-      });
+        // Haritayı başlat
+        // - closePopupOnClick: false => map click doesn't immediately close a just-opened marker popup
+        // - tap: false => avoids "first tap focuses, second tap clicks" on some mobile browsers
+        mapInstance.current = L.map(mapRef.current, {
+          closePopupOnClick: false,
+          tap: false
+        });
 
       // Defensive: if Leaflet created a tap handler anyway, disable it.
       try {
@@ -330,7 +331,12 @@ const MapComponent: React.FC<MapComponentProps> = ({
         try { mapInstance.current.invalidateSize(); } catch (e) { /* ignore */ }
       }, 120);
 
-      setMapReady(true);
+        setMapReady(true);
+      } catch (e) {
+        console.error('MapComponent: initMap failed', e);
+        setMapInitError('Harita yüklenemedi. İnternet bağlantınızı kontrol edin ve tekrar deneyin.');
+        setMapReady(false);
+      }
     };
 
     initMap();
@@ -1428,6 +1434,23 @@ const MapComponent: React.FC<MapComponentProps> = ({
   // like data-region="1" or data-region="2" so the click wiring can call onRegionSelect.
   return (
     <div className="relative w-full h-full">
+      {!useInlineSvg && mapInitError && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center p-4">
+          <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white/95 backdrop-blur p-4 shadow-sm">
+            <div className="text-sm font-semibold text-gray-900">Harita yüklenemedi</div>
+            <div className="mt-1 text-sm text-gray-600">{mapInitError}</div>
+            <button
+              type="button"
+              className="mt-3 w-full rounded-lg bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
+              onClick={() => {
+                try { window.location.reload(); } catch { /* ignore */ }
+              }}
+            >
+              Yeniden Dene
+            </button>
+          </div>
+        </div>
+      )}
       {!useInlineSvg && (
         <div
           ref={mapRef}
