@@ -33,9 +33,10 @@ import MesaiTrackingPanel from './components/MesaiTrackingPanel';
 import { updateTeamStatus, clearTeamStatus, getUserRoute, CompletedLocationInfo, calculateMinutesBetween } from './lib/teamStatus';
 import { saveTrackingState, loadTrackingState, clearTrackingState, type RouteTrackingStorage } from './lib/trackingStorage';
 import { updateTaskStatus, type Task } from './lib/tasks';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 
 function App() {
+  const navigate = useNavigate();
   const [selectedRegion, setSelectedRegion] = useState(0);
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
   const [focusLocation, setFocusLocation] = useState<Location | null>(null);
@@ -49,6 +50,14 @@ function App() {
   const mainScrollRef = useRef<HTMLElement | null>(null);
 
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+
+  const goToLogin = useCallback((replace = true) => {
+    try {
+      navigate('/login', { replace });
+    } catch {
+      // ignore
+    }
+  }, [navigate]);
 
   // Admin Panel state
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
@@ -2265,9 +2274,10 @@ function App() {
                           catch (e) { console.warn('pushActivity failed on logout', e); }
                         }
                         try { clearTrackingState(); } catch { /* ignore */ }
+                        try { localStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
                         setUserRole(null);
                         setCurrentUser(null);
-                        window.location.href = '/login';
+                        goToLogin(true);
                       }}
                       className="mt-3 w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-red-600 hover:bg-red-50 transition-colors"
                     >
@@ -2488,9 +2498,10 @@ function App() {
                                 catch (e) { console.warn('pushActivity failed on drawer logout', e); }
                               }
                               try { clearTrackingState(); } catch { /* ignore */ }
+                              try { localStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
                               setUserRole(null);
                               setCurrentUser(null);
-                              window.location.href = '/login';
+                              goToLogin(true);
                             }}
                             className="mt-3 w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-red-600 hover:bg-red-50 transition-colors"
                           >
@@ -2498,7 +2509,7 @@ function App() {
                           </button>
                         </>
                       ) : (
-                        <button type="button" onClick={() => window.location.href = '/login'} className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors">Giriş</button>
+                        <button type="button" onClick={() => goToLogin(false)} className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors">Giriş</button>
                       )}
                     </div>
 
