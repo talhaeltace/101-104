@@ -7,7 +7,7 @@
     "dev": "vite --host",
     "dev:network": "vite --host 0.0.0.0",
     "dev:https": "vite",
-    "build": "vite build",
+    "build": "node scripts/check-required-env.cjs && vite build",
     "build:prod": "vite build",
     "build:apk": "npm run build && npx cap sync android && cd android && gradlew.bat assembleDebug --no-daemon && cd .. && powershell -Command \"Copy-Item -Path 'android\\app\\build\\outputs\\apk\\debug\\*.apk' -Destination '.' -Force -Exclude 'output-metadata.json'\" && echo APK created in project root",
     "cap:init": "npx cap init",
