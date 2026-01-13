@@ -2,8 +2,6 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, HashRouter } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
-import App from './App.tsx';
-import AppErrorBoundary from './components/AppErrorBoundary.tsx';
 import './index.css';
 
 const rootEl = document.getElementById('root');
@@ -24,7 +22,11 @@ const showBootError = (title: string, details?: string) => {
   }
 };
 
-// Catch errors that happen before React mounts (module eval / top-level crashes)
+// IMPORTANT: ESM dependencies execute before this module's body.
+// So we must NOT import App (or anything that imports Supabase) at top-level,
+// otherwise a missing env var can crash before we install handlers.
+
+// Catch errors that happen before React mounts
 window.addEventListener('error', (ev: any) => {
   const msg = ev?.message || ev?.error?.message || String(ev?.error || 'Unknown error');
   showBootError('Uygulama başlatılamadı', msg);
@@ -35,14 +37,33 @@ window.addEventListener('unhandledrejection', (ev: any) => {
   showBootError('Uygulama başlatılamadı', msg);
 });
 
-const Router: any = Capacitor.getPlatform() === 'web' ? BrowserRouter : HashRouter;
+const bootstrap = async () => {
+  if (!rootEl) {
+    // No root element => nothing to render into.
+    return;
+  }
 
-createRoot(rootEl!).render(
-  <StrictMode>
-    <AppErrorBoundary>
-      <Router>
-        <App />
-      </Router>
-    </AppErrorBoundary>
-  </StrictMode>
-);
+  try {
+    const [{ default: App }, { default: AppErrorBoundary }] = await Promise.all([
+      import('./App.tsx'),
+      import('./components/AppErrorBoundary.tsx')
+    ]);
+
+    const Router: any = Capacitor.getPlatform() === 'web' ? BrowserRouter : HashRouter;
+
+    createRoot(rootEl).render(
+      <StrictMode>
+        <AppErrorBoundary>
+          <Router>
+            <App />
+          </Router>
+        </AppErrorBoundary>
+      </StrictMode>
+    );
+  } catch (err: any) {
+    const msg = err?.message || String(err || 'Boot error');
+    showBootError('Uygulama başlatılamadı', msg);
+  }
+};
+
+bootstrap();
