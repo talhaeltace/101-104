@@ -18,15 +18,19 @@ const sizes = [
 async function generateIcons() {
   console.log('Reading source icon:', sourceIcon);
 
-  // Create a deterministic 1024x1024 square base first.
-  // Using fit:'contain' ensures padding is applied BEFORE resizing so the
-  // smaller outputs don't end up with unscaled padding (which breaks actool).
+  // iOS icons should be 1024x1024 with no transparency.
+  // The current source is 1024x873 with alpha; using `contain` would add visible
+  // padding (white bars) in the final icon. Instead:
+  // - trim transparent border
+  // - resize with `cover` (crop) so the artwork fills the square
+  // - flatten to remove alpha (App Store requires opaque icons)
   const squared1024 = await sharp(sourceIcon)
+    .trim()
     .resize(1024, 1024, {
-      fit: 'contain',
-      background: { r: 255, g: 255, b: 255, alpha: 1 }
+      fit: 'cover',
+      position: 'centre'
     })
-    .flatten({ background: { r: 255, g: 255, b: 255 } })
+    .flatten({ background: { r: 11, g: 16, b: 32 } })
     .png()
     .toBuffer();
   
