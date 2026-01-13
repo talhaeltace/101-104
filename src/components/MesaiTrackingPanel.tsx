@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, RefreshCw, Timer, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Calendar, ChevronDown, ChevronUp, RefreshCw, Timer, X } from 'lucide-react';
 import { listWorkEntries, type WorkEntryRow } from '../lib/workEntries';
 import { formatDuration as formatMinutes } from '../lib/teamStatus';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
@@ -7,6 +7,8 @@ import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 type MesaiDaySummary = {
   date: string; // YYYY-MM-DD (local)
   completedCount: number;
+  normalCompletedCount: number;
+  overtimeCompletedCount: number;
   workMinutes: number;
   travelMinutes: number;
   totalMinutes: number;
@@ -32,6 +34,12 @@ type MesaiUserSummary = {
     completedAt: string | null;
     travelMinutes: number;
     workMinutes: number;
+    normalWorkMinutes: number;
+    overtimeWorkMinutes: number;
+    normalTravelMinutes: number;
+    overtimeTravelMinutes: number;
+    normalMinutes: number;
+    overtimeMinutes: number;
   }>;
 };
 
@@ -47,6 +55,19 @@ const toYyyyMm = (d: Date) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   return `${y}-${m}`;
+};
+
+const shiftYyyyMm = (yyyyMm: string, deltaMonths: number) => {
+  const { start } = monthBoundsFromYyyyMm(yyyyMm);
+  const d = new Date(start.getFullYear(), start.getMonth() + deltaMonths, 1, 0, 0, 0, 0);
+  return toYyyyMm(d);
+};
+
+const toIsoYmd = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 };
 
 const monthBoundsFromYyyyMm = (yyyyMm: string) => {
@@ -143,6 +164,18 @@ const allocateMinutesBySchedule = (startIso: string, endIso: string) => {
   return out;
 };
 
+const sumAllocTotals = (alloc: Map<string, { total: number; normal: number; overtime: number }>) => {
+  let total = 0;
+  let normal = 0;
+  let overtime = 0;
+  for (const v of alloc.values()) {
+    total += Number(v.total || 0);
+    normal += Number(v.normal || 0);
+    overtime += Number(v.overtime || 0);
+  }
+  return { total, normal, overtime };
+};
+
 const formatTime = (isoString: string) => {
   return new Date(isoString).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 };
@@ -158,6 +191,8 @@ const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, end
       const emptyTotal: MesaiDaySummary = {
         date: `${startYmd}..${endYmd}`,
         completedCount: 0,
+        normalCompletedCount: 0,
+        overtimeCompletedCount: 0,
         workMinutes: 0,
         travelMinutes: 0,
         totalMinutes: 0,
@@ -182,6 +217,8 @@ const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, end
       d = {
         date,
         completedCount: 0,
+        normalCompletedCount: 0,
+        overtimeCompletedCount: 0,
         workMinutes: 0,
         travelMinutes: 0,
         totalMinutes: 0,
@@ -213,6 +250,21 @@ const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, end
     const departedAt = r.departed_at || (travelMins > 0 ? new Date(new Date(r.arrived_at).getTime() - travelMins * 60000).toISOString() : null);
     const arrivedAt = r.arrived_at;
     const completedAt = r.completed_at;
+
+    // Per-completion allocation totals so the UI can show ONLY normal or ONLY overtime items.
+    // This avoids confusing mixed lists ("ek" view showing normal-only items, etc.).
+    let travelTotals = { total: 0, normal: 0, overtime: 0 };
+    if (departedAt && arrivedAt && new Date(arrivedAt).getTime() > new Date(departedAt).getTime()) {
+      travelTotals = sumAllocTotals(allocateMinutesBySchedule(departedAt, arrivedAt));
+    }
+
+    let workTotals = { total: 0, normal: 0, overtime: 0 };
+    if (arrivedAt && completedAt && new Date(completedAt).getTime() > new Date(arrivedAt).getTime()) {
+      workTotals = sumAllocTotals(allocateMinutesBySchedule(arrivedAt, completedAt));
+    }
+
+    const completionNormalMinutes = travelTotals.normal + workTotals.normal;
+    const completionOvertimeMinutes = travelTotals.overtime + workTotals.overtime;
 
     // Travel allocation (departed -> arrived)
     // Use timestamp window primarily (more reliable than stored minutes), but keep stored minutes for display.
@@ -247,7 +299,10 @@ const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, end
 
     // Completion count attributed to completion day.
     const completionDay = toLocalYmd(completedAt);
-    ensureDay(u, completionDay).completedCount += 1;
+    const completionDaySummary = ensureDay(u, completionDay);
+    completionDaySummary.completedCount += 1;
+    if (completionNormalMinutes > 0) completionDaySummary.normalCompletedCount += 1;
+    if (completionOvertimeMinutes > 0) completionDaySummary.overtimeCompletedCount += 1;
 
     u.completions.push({
       date: completionDay,
@@ -256,7 +311,13 @@ const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, end
       arrivedAt,
       completedAt,
       travelMinutes: travelMins,
-      workMinutes: workMins
+      workMinutes: workMins,
+      normalWorkMinutes: workTotals.normal,
+      overtimeWorkMinutes: workTotals.overtime,
+      normalTravelMinutes: travelTotals.normal,
+      overtimeTravelMinutes: travelTotals.overtime,
+      normalMinutes: completionNormalMinutes,
+      overtimeMinutes: completionOvertimeMinutes
     });
   }
 
@@ -266,6 +327,8 @@ const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, end
     let firstAt: string | null = null;
     let lastAt: string | null = null;
     let completedCount = 0;
+    let normalCompletedCount = 0;
+    let overtimeCompletedCount = 0;
     let workMinutes = 0;
     let travelMinutes = 0;
     let normalMinutes = 0;
@@ -281,6 +344,8 @@ const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, end
       d.normalMinutes = (d.normalWorkMinutes || 0) + (d.normalTravelMinutes || 0);
       d.overtimeMinutes = (d.overtimeWorkMinutes || 0) + (d.overtimeTravelMinutes || 0);
       completedCount += d.completedCount;
+      normalCompletedCount += d.normalCompletedCount;
+      overtimeCompletedCount += d.overtimeCompletedCount;
       workMinutes += d.workMinutes;
       travelMinutes += d.travelMinutes;
       normalMinutes += d.normalMinutes;
@@ -296,6 +361,8 @@ const computeMesaiFromWorkEntries = (rows: WorkEntryRow[], startYmd: string, end
     u.total = {
       date: `${startYmd}..${endYmd}`,
       completedCount,
+      normalCompletedCount,
+      overtimeCompletedCount,
       workMinutes,
       travelMinutes,
       totalMinutes: workMinutes + travelMinutes,
@@ -326,6 +393,7 @@ interface Props {
 }
 
 type MesaiMode = 'normal' | 'overtime';
+type RangePreset = 'month' | 'week' | 'today' | 'custom';
 
 const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
   useBodyScrollLock(isOpen);
@@ -347,11 +415,13 @@ const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
   const [byUser, setByUser] = useState<MesaiUserSummary[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [mode, setMode] = useState<MesaiMode>('normal');
+  const [rangePreset, setRangePreset] = useState<RangePreset>('month');
 
   useEffect(() => {
     if (!isOpen) return;
     setStartYmd(monthStartYmd);
     setEndYmd(monthEndYmd);
+    setRangePreset('month');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, selectedMonth, monthStartYmd, monthEndYmd]);
 
@@ -389,6 +459,10 @@ const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
   const sumCompleted = byUser.reduce((s, u) => s + (u.total.completedCount || 0), 0);
+  const sumModeCompleted = byUser.reduce(
+    (s, u) => s + (mode === 'normal' ? (u.total.normalCompletedCount || 0) : (u.total.overtimeCompletedCount || 0)),
+    0
+  );
   const sumWork = byUser.reduce(
     (s, u) => s + (mode === 'normal' ? (u.total.normalWorkMinutes || 0) : (u.total.overtimeWorkMinutes || 0)),
     0
@@ -399,6 +473,28 @@ const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
   );
   const sumTotal = byUser.reduce((s, u) => s + (mode === 'normal' ? (u.total.normalMinutes || 0) : (u.total.overtimeMinutes || 0)), 0);
   const sumGrandTotal = byUser.reduce((s, u) => s + (u.total.totalMinutes || 0), 0);
+
+  const applyRange = (start: Date, end: Date, preset: RangePreset) => {
+    const s = toIsoYmd(start);
+    const e = toIsoYmd(end);
+    setStartYmd(s);
+    setEndYmd(e);
+    setRangePreset(preset);
+  };
+
+  const applyToday = () => {
+    const now = new Date();
+    applyRange(now, now, 'today');
+  };
+
+  const applyThisWeek = () => {
+    const now = new Date();
+    const day = now.getDay();
+    const diffToMonday = (day + 6) % 7; // Mon=0..Sun=6
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday);
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+    applyRange(start, end, 'week');
+  };
 
   return (
     <div className="fixed inset-0 z-[1400] bg-black/40">
@@ -416,15 +512,6 @@ const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="hidden sm:flex items-center gap-2 mr-1">
-              <div className="text-xs text-white/70">Ay</div>
-              <input
-                type="month"
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value || toYyyyMm(new Date()))}
-                className="h-9 px-2 rounded-lg bg-white/10 text-white text-sm border border-white/10 focus:outline-none focus:ring-2 focus:ring-white/20"
-              />
-            </div>
             <button
               type="button"
               onClick={() => fetchReport()}
@@ -442,84 +529,151 @@ const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
         <div className="flex-1 overflow-y-auto p-3 sm:p-6 bg-gray-50">
           <div className="max-w-5xl mx-auto space-y-4">
             <div className="bg-white border border-gray-200 rounded-xl p-4">
-              <div className="flex flex-col lg:flex-row lg:items-end gap-3">
-                <div className="flex items-center gap-2">
-                  <div>
-                    <div className="text-xs text-gray-500">Başlangıç</div>
-                    <input
-                      type="date"
-                      value={startYmd}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setStartYmd(v);
-                        if (endYmd && v > endYmd) setEndYmd(v);
-                      }}
-                      className="mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                    />
+              <div className="flex flex-col gap-3">
+                <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr] items-end gap-3">
+                  <div className="w-full lg:w-auto">
+                    <div className="grid grid-cols-[40px_minmax(0,1fr)_40px] items-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMonth((m) => shiftYyyyMm(m, -1))}
+                      className="h-10 w-10 shrink-0 inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
+                      title="Önceki ay"
+                    >
+                      <ArrowLeft className="w-4 h-4 text-gray-700" />
+                    </button>
+
+                    <div className="min-w-0">
+                      <div className="text-xs text-gray-500">Ay</div>
+                      <input
+                        type="month"
+                        value={selectedMonth}
+                        onChange={(e) => setSelectedMonth(e.target.value || toYyyyMm(new Date()))}
+                        className="mt-1 h-10 w-full px-3 rounded-lg bg-white text-gray-900 text-sm border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-200"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMonth((m) => shiftYyyyMm(m, 1))}
+                      className="h-10 w-10 shrink-0 inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
+                      title="Sonraki ay"
+                    >
+                      <ArrowRight className="w-4 h-4 text-gray-700" />
+                    </button>
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Bitiş</div>
-                    <input
-                      type="date"
-                      value={endYmd}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setEndYmd(v);
-                        if (startYmd && v < startYmd) setStartYmd(v);
-                      }}
-                      className="mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                    />
+
+                  <div className="w-full">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_auto] items-end gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <div className="text-xs text-gray-500">Başlangıç</div>
+                        <div className="mt-1 flex items-center gap-2 h-10 px-3 border border-gray-200 rounded-lg bg-white">
+                          <Calendar className="w-4 h-4 text-gray-400" />
+                          <input
+                            type="date"
+                            value={startYmd}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setStartYmd(v);
+                              if (endYmd && v > endYmd) setEndYmd(v);
+                              setRangePreset('custom');
+                            }}
+                            className="text-sm bg-transparent focus:outline-none w-full"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-xs text-gray-500">Bitiş</div>
+                        <div className="mt-1 flex items-center gap-2 h-10 px-3 border border-gray-200 rounded-lg bg-white">
+                          <Calendar className="w-4 h-4 text-gray-400" />
+                          <input
+                            type="date"
+                            value={endYmd}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setEndYmd(v);
+                              if (startYmd && v < startYmd) setStartYmd(v);
+                              setRangePreset('custom');
+                            }}
+                            className="text-sm bg-transparent focus:outline-none w-full"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 w-full lg:w-auto">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStartYmd(monthStartYmd);
+                            setEndYmd(monthEndYmd);
+                            setRangePreset('month');
+                          }}
+                          className={`h-10 w-full px-3 rounded-lg border text-sm hover:bg-gray-50 transition-colors ${
+                            rangePreset === 'month' ? 'border-gray-900 bg-gray-900 text-white hover:bg-gray-800' : 'border-gray-200 bg-white text-gray-700'
+                          }`}
+                        >
+                          Seçili ay
+                        </button>
+                        <button
+                          type="button"
+                          onClick={applyThisWeek}
+                          className={`h-10 w-full px-3 rounded-lg border text-sm hover:bg-gray-50 transition-colors ${
+                            rangePreset === 'week' ? 'border-gray-900 bg-gray-900 text-white hover:bg-gray-800' : 'border-gray-200 bg-white text-gray-700'
+                          }`}
+                        >
+                          Bu hafta
+                        </button>
+                        <button
+                          type="button"
+                          onClick={applyToday}
+                          className={`h-10 w-full px-3 rounded-lg border text-sm hover:bg-gray-50 transition-colors ${
+                            rangePreset === 'today' ? 'border-gray-900 bg-gray-900 text-white hover:bg-gray-800' : 'border-gray-200 bg-white text-gray-700'
+                          }`}
+                        >
+                          Bugün
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => fetchReport()}
+                          className="h-10 w-full px-4 rounded-lg bg-gray-900 text-white text-sm font-semibold hover:bg-gray-800 disabled:opacity-60 disabled:hover:bg-gray-900 col-span-3 sm:col-span-1"
+                          disabled={loading}
+                        >
+                          {loading ? 'Yükleniyor…' : 'Raporu Getir'}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => fetchReport()}
-                    className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-800"
-                    disabled={loading}
-                  >
-                    {loading ? 'Yükleniyor…' : 'Raporu Getir'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setStartYmd(monthStartYmd);
-                      setEndYmd(monthEndYmd);
-                      setTimeout(() => fetchReport(), 0);
-                    }}
-                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
-                  >
-                    Seçili ay
-                  </button>
-                </div>
-              </div>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="inline-flex items-center rounded-xl border border-gray-200 bg-gray-50 p-1 shadow-sm w-fit">
+                    <button
+                      type="button"
+                      onClick={() => setMode('normal')}
+                      className={`px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                        mode === 'normal' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-700 hover:bg-white'
+                      }`}
+                    >
+                      Normal Mesai
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMode('overtime')}
+                      className={`px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                        mode === 'overtime' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-700 hover:bg-white'
+                      }`}
+                    >
+                      Ek Mesai
+                    </button>
+                  </div>
 
-              <div className="mt-3 flex items-center gap-2">
-                <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
-                  <button
-                    type="button"
-                    onClick={() => setMode('normal')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
-                      mode === 'normal' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-100'
-                    }`}
-                  >
-                    Normal Mesai
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMode('overtime')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
-                      mode === 'overtime' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-100'
-                    }`}
-                  >
-                    Ek Mesai
-                  </button>
+                  <div className="text-xs text-gray-500">
+                    Kural: Hafta içi 09:00–18:00, Cumartesi 09:00–14:00, Pazar normal mesai yok (tamamı ek mesai).
+                  </div>
                 </div>
-              </div>
-
-              <div className="mt-3 text-xs text-gray-500">
-                Mesai kuralı: Hafta içi 09:00–18:00, Cumartesi 09:00–14:00, Pazar normal mesai yok (tamamı ek mesai).
               </div>
             </div>
 
@@ -533,8 +687,9 @@ const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
               <>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   <div className="bg-white border border-gray-200 rounded-lg p-3">
-                    <div className="text-xs text-gray-500">Tamamlanan</div>
-                    <div className="text-sm font-bold text-gray-900">{sumCompleted}</div>
+                    <div className="text-xs text-gray-500">{mode === 'normal' ? 'Normal Tamamlanan' : 'Ek Mesai Tamamlanan'}</div>
+                    <div className="text-sm font-bold text-gray-900">{sumModeCompleted}</div>
+                    <div className="text-[11px] text-gray-400 mt-0.5">Genel: {sumCompleted}</div>
                   </div>
                   <div className="bg-white border border-gray-200 rounded-lg p-3">
                     <div className="text-xs text-gray-500">{mode === 'normal' ? 'Normal Çalışma' : 'Ek Çalışma'}</div>
@@ -561,12 +716,28 @@ const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                     const modeWork = mode === 'normal' ? (u.total.normalWorkMinutes || 0) : (u.total.overtimeWorkMinutes || 0);
                     const modeTravel = mode === 'normal' ? (u.total.normalTravelMinutes || 0) : (u.total.overtimeTravelMinutes || 0);
                     const modeTotal = mode === 'normal' ? (u.total.normalMinutes || 0) : (u.total.overtimeMinutes || 0);
-                    const dayKeys = Object.keys(u.days).sort().reverse();
+                    const modeCompleted = mode === 'normal' ? (u.total.normalCompletedCount || 0) : (u.total.overtimeCompletedCount || 0);
+                    const dayKeys = Object.keys(u.days)
+                      .filter((k) => {
+                        const d = u.days[k];
+                        const m = mode === 'normal' ? (d.normalMinutes || 0) : (d.overtimeMinutes || 0);
+                        const c = mode === 'normal' ? (d.normalCompletedCount || 0) : (d.overtimeCompletedCount || 0);
+                        return (m || 0) > 0 || (c || 0) > 0;
+                      })
+                      .sort()
+                      .reverse();
+
+                    const visibleCompletions = u.completions.filter((c) => {
+                      const m = mode === 'normal' ? (c.normalMinutes || 0) : (c.overtimeMinutes || 0);
+                      return (m || 0) > 0;
+                    });
+
                     return (
                       <div key={u.username} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
                         <button
                           type="button"
                           onClick={() => setExpanded((prev) => ({ ...prev, [u.username]: !isOpenUser }))}
+                          aria-expanded={isOpenUser}
                           className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-gray-50"
                         >
                           <div className="flex items-center gap-3">
@@ -576,7 +747,7 @@ const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                             <div className="text-left">
                               <div className="text-sm font-semibold text-gray-900">{u.username}</div>
                               <div className="text-xs text-gray-500">
-                                {u.total.firstAt ? formatTime(u.total.firstAt) : '--:--'} - {u.total.lastAt ? formatTime(u.total.lastAt) : '--:--'} • {u.total.completedCount} tamamlanan
+                                {u.total.firstAt ? formatTime(u.total.firstAt) : '--:--'} - {u.total.lastAt ? formatTime(u.total.lastAt) : '--:--'} • {label} tamamlanan: {modeCompleted} • Genel: {u.total.completedCount}
                               </div>
                             </div>
                           </div>
@@ -592,77 +763,101 @@ const MesaiTrackingPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                         {isOpenUser && (
                           <div className="px-4 pb-4 space-y-3">
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3">
-                              <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
+                              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
                                 <div className="text-[11px] text-gray-500">{label} Çalışma</div>
-                                <div className="text-sm font-bold text-gray-900">{formatMinutes(modeWork)}</div>
+                                <div className="text-base font-bold text-gray-900">{formatMinutes(modeWork)}</div>
                               </div>
-                              <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
+                              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
                                 <div className="text-[11px] text-gray-500">{label} Yol</div>
-                                <div className="text-sm font-bold text-gray-900">{formatMinutes(modeTravel)}</div>
+                                <div className="text-base font-bold text-gray-900">{formatMinutes(modeTravel)}</div>
                               </div>
-                              <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
+                              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
                                 <div className="text-[11px] text-gray-500">{label} Toplam</div>
-                                <div className="text-sm font-bold text-gray-900">{formatMinutes(modeTotal)}</div>
+                                <div className="text-base font-bold text-gray-900">{formatMinutes(modeTotal)}</div>
                               </div>
-                              <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
+                              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
                                 <div className="text-[11px] text-gray-500">Genel Toplam</div>
-                                <div className="text-sm font-bold text-gray-900">{formatMinutes(u.total.totalMinutes)}</div>
+                                <div className="text-base font-bold text-gray-900">{formatMinutes(u.total.totalMinutes)}</div>
                               </div>
                             </div>
 
-                            <div className="border-t border-gray-100 pt-3">
-                              <div className="text-xs font-semibold text-gray-700 mb-2">Günlük kırılım</div>
-                              <div className="space-y-1">
-                                {dayKeys.map((k) => {
-                                  const d = u.days[k];
-                                  const dayWork = mode === 'normal' ? (d.normalWorkMinutes || 0) : (d.overtimeWorkMinutes || 0);
-                                  const dayTravel = mode === 'normal' ? (d.normalTravelMinutes || 0) : (d.overtimeTravelMinutes || 0);
-                                  const dayTotal = mode === 'normal' ? (d.normalMinutes || 0) : (d.overtimeMinutes || 0);
-                                  return (
-                                    <div key={k} className="flex items-center justify-between text-sm">
-                                      <div className="text-gray-700">
-                                        <span className="font-medium">{k}</span>
-                                        <span className="text-gray-400"> • </span>
-                                        <span className="text-gray-600">{d.completedCount} tamamlanan</span>
-                                        <span className="text-gray-400"> • </span>
-                                        <span className="text-gray-600">{label} Çalışma {formatMinutes(dayWork)} / {label} Yol {formatMinutes(dayTravel)}</span>
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                              <div className="bg-white border border-gray-200 rounded-xl p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="text-xs font-semibold text-gray-700">Günlük kırılım</div>
+                                  <div className="text-[11px] text-gray-500">Sadece {label.toLowerCase()} mesai görünen günler</div>
+                                </div>
+                                <div className="space-y-2">
+                                  {dayKeys.map((k) => {
+                                    const d = u.days[k];
+                                    const dayWork = mode === 'normal' ? (d.normalWorkMinutes || 0) : (d.overtimeWorkMinutes || 0);
+                                    const dayTravel = mode === 'normal' ? (d.normalTravelMinutes || 0) : (d.overtimeTravelMinutes || 0);
+                                    const dayTotal = mode === 'normal' ? (d.normalMinutes || 0) : (d.overtimeMinutes || 0);
+                                    const dayCompleted = mode === 'normal' ? (d.normalCompletedCount || 0) : (d.overtimeCompletedCount || 0);
+                                    return (
+                                      <div key={k} className="flex items-start justify-between gap-3 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                                        <div className="min-w-0">
+                                          <div className="text-sm font-semibold text-gray-900">{k}</div>
+                                          <div className="text-xs text-gray-600 mt-0.5">
+                                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-white border border-gray-200 mr-2">
+                                              {dayCompleted} tamamlanan
+                                            </span>
+                                            <span>{label} İş {formatMinutes(dayWork)}</span>
+                                            <span className="text-gray-300"> • </span>
+                                            <span>{label} Yol {formatMinutes(dayTravel)}</span>
+                                          </div>
+                                        </div>
+                                        <div className="text-right shrink-0">
+                                          <div className="text-sm font-bold text-gray-900">{formatMinutes(dayTotal)}</div>
+                                          <div className="text-[11px] text-gray-500">Genel: {formatMinutes(d.totalMinutes)}</div>
+                                        </div>
                                       </div>
-                                      <div className="text-right">
-                                        <div className="font-semibold text-gray-900">{formatMinutes(dayTotal)}</div>
-                                        <div className="text-xs text-gray-500">Genel: {formatMinutes(d.totalMinutes)}</div>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
+                                    );
+                                  })}
+                                </div>
                               </div>
-                            </div>
 
-                            <div className="border-t border-gray-100 pt-3">
-                              <div className="text-xs font-semibold text-gray-700 mb-2">Tamamlanan işler</div>
-                              <div className="max-h-52 overflow-y-auto pr-1 space-y-1">
-                                {u.completions.slice(0, 200).map((c, idx) => (
-                                  <div
-                                    key={`${c.date}-${c.locationName}-${idx}`}
-                                    className="flex items-center justify-between text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2"
-                                  >
-                                    <div className="min-w-0">
-                                      <div className="text-gray-900 font-medium truncate">{c.locationName}</div>
-                                      <div className="text-xs text-gray-500 truncate">
-                                        {c.date}
-                                        <span className="text-gray-400"> • </span>
-                                        <span>Çıkış {c.departedAt ? formatTime(c.departedAt) : '--:--'}</span>
-                                        <span className="text-gray-400"> • </span>
-                                        <span>Varış {c.arrivedAt ? formatTime(c.arrivedAt) : '--:--'}</span>
-                                        <span className="text-gray-400"> • </span>
-                                        <span>Bitiş {c.completedAt ? formatTime(c.completedAt) : '--:--'}</span>
+                              <div className="bg-white border border-gray-200 rounded-xl p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="text-xs font-semibold text-gray-700">Tamamlanan işler</div>
+                                  <div className="text-[11px] text-gray-500">Sadece {label.toLowerCase()} dakika olanlar</div>
+                                </div>
+                                <div className="max-h-72 overflow-y-auto pr-1 space-y-2">
+                                  {visibleCompletions.slice(0, 200).map((c, idx) => (
+                                    <div
+                                      key={`${c.date}-${c.locationName}-${idx}`}
+                                      className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2"
+                                    >
+                                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                                        <div className="min-w-0">
+                                          <div className="text-gray-900 font-semibold truncate">{c.locationName}</div>
+                                          <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-white border border-gray-200">{c.date}</span>
+                                            <span>Çıkış {c.departedAt ? formatTime(c.departedAt) : '--:--'}</span>
+                                            <span className="text-gray-300">•</span>
+                                            <span>Varış {c.arrivedAt ? formatTime(c.arrivedAt) : '--:--'}</span>
+                                            <span className="text-gray-300">•</span>
+                                            <span>Bitiş {c.completedAt ? formatTime(c.completedAt) : '--:--'}</span>
+                                          </div>
+                                        </div>
+
+                                        <div className="text-left sm:text-right shrink-0">
+                                          <div className="inline-flex items-center px-2.5 py-1 rounded-lg bg-gray-900 text-white text-xs font-semibold">
+                                            {label} {formatMinutes(mode === 'normal' ? (c.normalMinutes || 0) : (c.overtimeMinutes || 0))}
+                                          </div>
+                                          <div className="text-xs text-gray-600 mt-1">
+                                            İş {formatMinutes(mode === 'normal' ? (c.normalWorkMinutes || 0) : (c.overtimeWorkMinutes || 0))}
+                                            <span className="text-gray-300"> • </span>
+                                            Yol {formatMinutes(mode === 'normal' ? (c.normalTravelMinutes || 0) : (c.overtimeTravelMinutes || 0))}
+                                          </div>
+                                        </div>
                                       </div>
                                     </div>
-                                    <div className="text-right shrink-0 pl-3">
-                                      <div className="text-gray-900 font-semibold">İş {formatMinutes(c.workMinutes)}</div>
-                                      <div className="text-xs text-gray-500">Yol {formatMinutes(c.travelMinutes || 0)}</div>
-                                    </div>
-                                  </div>
-                                ))}
+                                  ))}
+                                  {visibleCompletions.length === 0 && (
+                                    <div className="text-sm text-gray-500">Bu kullanıcıda seçili mod için kayıt yok.</div>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </div>

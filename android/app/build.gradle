@@ -39,7 +39,7 @@ android {
         applicationId "com.nelit.project101104"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 25
+        versionCode 26
         versionName "2.1.8"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
