@@ -5,9 +5,11 @@ import { regions } from '../data/regions';
 interface RegionSelectorProps {
   selectedRegion: number;
   onRegionChange: (regionId: number) => void;
+  // Tailwind margin-top class for the dropdown (e.g., 'mt-2' default, or 'mt-12' for mobile header)
+  dropdownOffsetClass?: string;
 }
 
-const RegionSelector: React.FC<RegionSelectorProps> = ({ selectedRegion, onRegionChange }) => {
+const RegionSelector: React.FC<RegionSelectorProps> = ({ selectedRegion, onRegionChange, dropdownOffsetClass = 'mt-2' }) => {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -59,7 +61,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ selectedRegion, onRegio
         <ul
           role="listbox"
           aria-activedescendant={String(selectedRegion)}
-          className="absolute left-0 z-50 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg py-1 overflow-auto max-h-56 w-full"
+          className={`absolute left-0 z-50 ${dropdownOffsetClass} bg-white border border-gray-200 rounded-lg shadow-lg py-1 overflow-auto max-h-56 w-full`}
         >
           <li
             role="option"

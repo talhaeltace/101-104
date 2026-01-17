@@ -78,6 +78,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
   const didFitMarkersForRegionRef = useRef<number | null>(null);
   const [mapReady, setMapReady] = useState<boolean>(false);
   const [mapInitError, setMapInitError] = useState<string | null>(null);
+  const [mapInitNonce, setMapInitNonce] = useState<number>(0);
+  const initTokenRef = useRef<number>(0);
+  const invalidateSizeTimeoutRef = useRef<number | null>(null);
   // whether the deployment overlay is expanded. On small screens we'll collapse it by default.
   const [overlayOpen, setOverlayOpen] = useState<boolean>(true);
   const [svgAcceptedPopup, setSvgAcceptedPopup] = useState<null | {
@@ -257,14 +260,34 @@ const MapComponent: React.FC<MapComponentProps> = ({
     const initMap = async () => {
       if (!mapRef.current) return;
 
+      // Abort token for this init attempt (helps avoid async work after unmount/retry)
+      const token = ++initTokenRef.current;
+
       // Check if the DOM element already has a Leaflet map initialized
-      if (mapInstance.current) return;
+      if (mapInstance.current) {
+        try {
+          try { mapInstance.current.off?.(); } catch { /* ignore */ }
+          mapInstance.current.remove();
+        } catch {
+          // ignore
+        }
+        mapInstance.current = null;
+      }
+
+      // Clear any scheduled invalidation from previous runs
+      if (invalidateSizeTimeoutRef.current != null) {
+        try { window.clearTimeout(invalidateSizeTimeoutRef.current); } catch { /* ignore */ }
+        invalidateSizeTimeoutRef.current = null;
+      }
 
       try {
         setMapInitError(null);
 
         // Leaflet'i dinamik olarak yükle
         const L = (await import('leaflet')) as any;
+
+        // If a newer init started while we awaited, abort silently.
+        if (initTokenRef.current !== token) return;
         leafletRef.current = L;
         // Keep global for any legacy usages (safe fallback)
         try { (window as any).L = L; } catch { /* ignore */ }
@@ -280,10 +303,39 @@ const MapComponent: React.FC<MapComponentProps> = ({
         // Haritayı başlat
         // - closePopupOnClick: false => map click doesn't immediately close a just-opened marker popup
         // - tap: false => avoids "first tap focuses, second tap clicks" on some mobile browsers
+        // Defensive: if Leaflet left a stale container id (common when re-mounting quickly), clear it.
+        try {
+          const container: any = mapRef.current;
+          if (container) {
+            if (container._leaflet_id) {
+              try {
+                delete container._leaflet_id;
+              } catch {
+                container._leaflet_id = undefined;
+              }
+            }
+            // Clear any leftover panes/controls
+            if (typeof container.innerHTML === 'string') container.innerHTML = '';
+          }
+        } catch {
+          // ignore
+        }
+
         mapInstance.current = L.map(mapRef.current, {
           closePopupOnClick: false,
           tap: false
         });
+
+        if (initTokenRef.current !== token) {
+          try {
+            mapInstance.current?.off?.();
+            mapInstance.current?.remove?.();
+          } catch {
+            // ignore
+          }
+          mapInstance.current = null;
+          return;
+        }
 
       // Defensive: if Leaflet created a tap handler anyway, disable it.
       try {
@@ -327,14 +379,33 @@ const MapComponent: React.FC<MapComponentProps> = ({
       }
       // Some mobile browsers / WebView report viewport heights differently on orientation change.
       // Force Leaflet to recalculate its size shortly after init so tiles and controls are laid out correctly.
-      setTimeout(() => {
-        try { mapInstance.current.invalidateSize(); } catch (e) { /* ignore */ }
+      invalidateSizeTimeoutRef.current = window.setTimeout(() => {
+        if (initTokenRef.current !== token) return;
+        const m = mapInstance.current;
+        if (!m) return;
+        try { m.invalidateSize(); } catch { /* ignore */ }
       }, 120);
 
         setMapReady(true);
       } catch (e) {
         console.error('MapComponent: initMap failed', e);
-        setMapInitError('Harita yüklenemedi. İnternet bağlantınızı kontrol edin ve tekrar deneyin.');
+        // Clean up any partially-created map so retry can work without a full reload
+        if (mapInstance.current) {
+          try {
+            try { mapInstance.current.off?.(); } catch { /* ignore */ }
+            try { mapInstance.current.remove?.(); } catch { /* ignore */ }
+          } catch {
+            // ignore
+          }
+          mapInstance.current = null;
+        }
+        didInitialFitRef.current = false;
+        const isOffline = typeof navigator !== 'undefined' && navigator && 'onLine' in navigator && navigator.onLine === false;
+        setMapInitError(
+          isOffline
+            ? 'Harita yüklenemedi. İnternet bağlantınız yok gibi görünüyor. Bağlanıp tekrar deneyin.'
+            : 'Harita yüklenemedi. İnternet bağlantınızı kontrol edin ve tekrar deneyin.'
+        );
         setMapReady(false);
       }
     };
@@ -353,6 +424,14 @@ const MapComponent: React.FC<MapComponentProps> = ({
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
+
+      // Invalidate pending async work
+      initTokenRef.current++;
+
+      if (invalidateSizeTimeoutRef.current != null) {
+        try { window.clearTimeout(invalidateSizeTimeoutRef.current); } catch { /* ignore */ }
+        invalidateSizeTimeoutRef.current = null;
+      }
       if (mapInstance.current) {
         try {
           mapInstance.current.off('dragstart');
@@ -366,7 +445,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
       didInitialFitRef.current = false;
       setMapReady(false);
     };
-  }, [useInlineSvg]);
+  }, [useInlineSvg, mapInitNonce]);
 
   // Defensive: if the map instance already existed (e.g., HMR), enforce our options here too.
   useEffect(() => {
@@ -1443,7 +1522,13 @@ const MapComponent: React.FC<MapComponentProps> = ({
               type="button"
               className="mt-3 w-full rounded-lg bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
               onClick={() => {
-                try { window.location.reload(); } catch { /* ignore */ }
+                try {
+                  setMapInitError(null);
+                  setMapReady(false);
+                  setMapInitNonce((n) => n + 1);
+                } catch {
+                  // ignore
+                }
               }}
             >
               Yeniden Dene

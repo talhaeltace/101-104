@@ -5,11 +5,11 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 
 // Current app version - UPDATE THIS WHEN YOU RELEASE NEW VERSION
-// Android: versionName 2.1.8 (versionCode 26)
-// iOS: MARKETING_VERSION 2.1.8 (build 35)
+// Android: versionName 2.1.8 (versionCode 27)
+// iOS: MARKETING_VERSION 2.1.8 (build 36)
 const CURRENT_VERSION_NAME = '2.1.8';
-const CURRENT_ANDROID_VERSION_CODE = 26;
-const CURRENT_IOS_BUILD = 35;
+const CURRENT_ANDROID_VERSION_CODE = 27;
+const CURRENT_IOS_BUILD = 36;
 
 // Default store URLs (fallback when Supabase row has no store_url yet)
 const DEFAULT_ANDROID_STORE_URL =

@@ -6,6 +6,7 @@ import { Location } from './data/regions';
 import { useLocations } from './hooks/useLocations';
 import MapComponent from './components/MapComponent';
 import RegionSelector from './components/RegionSelector';
+import WeatherWidget from './components/WeatherWidget';
 import LocationStats from './components/LocationStats';
 import LocationList from './components/LocationList';
 import LocationEditModal from './components/LocationEditModal';
@@ -30,6 +31,8 @@ import AdminPanel from './components/AdminPanel';
 import AdminAcceptanceRequestsFullscreen from './components/AdminAcceptanceRequestsFullscreen';
 import AdminAssignedTasksFullscreen from './components/AdminAssignedTasksFullscreen';
 import MesaiTrackingPanel from './components/MesaiTrackingPanel';
+import MessagesOverlay from './components/MessagesOverlay';
+import AdminMessagesOverlay from './components/AdminMessagesOverlay';
 import { updateTeamStatus, clearTeamStatus, getUserRoute, CompletedLocationInfo, calculateMinutesBetween } from './lib/teamStatus';
 import { saveTrackingState, loadTrackingState, clearTrackingState, type RouteTrackingStorage } from './lib/trackingStorage';
 import { updateTaskStatus, type Task } from './lib/tasks';
@@ -66,11 +69,82 @@ function App() {
   const [isAssignedTasksAdminOpen, setIsAssignedTasksAdminOpen] = useState(false);
   const [pendingAcceptanceCount, setPendingAcceptanceCount] = useState<number>(0);
 
+  // In-app messages (user <-> admin). Opens from main sidebar.
+  const [isMessagesOpen, setIsMessagesOpen] = useState(false);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
+
   const { locations, loading, error, updateLocation, createLocation, deleteLocation } = useLocations();
   const [isCreateMode, setIsCreateMode] = useState(false);
   const [isRouteModalOpen, setIsRouteModalOpen] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
+
+  const canUseMessages = !!currentUser;
+
+  // Unread message badge (admin + non-admin).
+  useEffect(() => {
+    if (!currentUser) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    let isCancelled = false;
+    const userId = String(currentUser.id);
+    const isAdmin = userRole === 'admin';
+
+    const refresh = async () => {
+      try {
+        if (isAdmin) {
+          const { data, error } = await supabase
+            .from('app_messages')
+            .select('id, user_id, sender_user_id, is_read')
+            .eq('is_read', false);
+
+          if (isCancelled || error) return;
+          const rows = (data ?? []) as any[];
+          // Unread for admin: count user->admin messages (sender == user)
+          const count = rows.filter(r => String(r.sender_user_id) === String(r.user_id)).length;
+          setUnreadMessagesCount(count);
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('app_messages')
+          .select('id, user_id, sender_user_id, is_read')
+          .eq('user_id', userId)
+          .eq('is_read', false);
+
+        if (isCancelled || error) return;
+        const rows = (data ?? []) as any[];
+        // Unread for user: messages sent by others (admins)
+        const count = rows.filter(r => String(r.sender_user_id) !== String(r.user_id)).length;
+        setUnreadMessagesCount(count);
+      } catch {
+        // ignore
+      }
+    };
+
+    refresh();
+
+    const channel = isAdmin
+      ? supabase
+          .channel(`messages_badge_admin_${userId}`)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'app_messages' }, () => refresh())
+          .subscribe()
+      : supabase
+          .channel(`messages_badge_${userId}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'app_messages', filter: `user_id=eq.${userId}` },
+            () => refresh()
+          )
+          .subscribe();
+
+    return () => {
+      isCancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [currentUser, userRole]);
 
   // Manual dismissal timestamps for the pulsing "recent work" highlight per region.
   // If a newer activity happens after dismissal, the pulse will automatically re-appear.
@@ -2039,6 +2113,7 @@ function App() {
                         <div className="text-xs font-medium text-gray-500 mb-2">Bölge Seçimi</div>
                         <div className="min-w-0">
                           <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} />
+                          <WeatherWidget selectedRegion={selectedRegion} regions={locations} />
                         </div>
                       </div>
                     )}
@@ -2075,6 +2150,24 @@ function App() {
                       </button>
                       </div>
                     </div>
+
+                    {canUseMessages && (
+                      <div className="mt-4">
+                        <div className="text-xs font-medium text-gray-500 mb-2">Mesajlar</div>
+                        <button
+                          type="button"
+                          onClick={() => setIsMessagesOpen(true)}
+                          className="relative w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                        >
+                          Mesajlar
+                          {unreadMessagesCount > 0 && (
+                            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                              {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                    )}
 
                     {view === 'map' && userCanView && (
                       <div className="mt-4">
@@ -2367,7 +2460,7 @@ function App() {
                       <div className="flex-1 flex justify-center items-center gap-4 px-4 sm:px-8">
                         {userCanView ? (
                           <div className="w-full max-w-xl transform transition-all duration-200 hover:scale-[1.01]">
-                            <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} />
+                            <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} dropdownOffsetClass="mt-12" />
                           </div>
                         ) : (
                           <div className="text-sm sm:text-base font-semibold text-gray-800">MapFlow</div>
@@ -2387,6 +2480,17 @@ function App() {
                       )}
                     </div>
                   </div>
+
+                  {/* Mini sub-header: Weather (separate row under the main header) */}
+                  {userCanView && (
+                    <div className="border-t border-gray-100 bg-white/90 backdrop-blur-md">
+                      <div className="w-full px-4 sm:px-6 lg:px-8">
+                        <div className="h-10 flex items-center justify-center">
+                          <WeatherWidget selectedRegion={selectedRegion} regions={locations} variant="inline" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </header>
               )}
 
@@ -2421,6 +2525,24 @@ function App() {
                   </div>
 
                   <div className="space-y-4">
+                    {canUseMessages && (
+                      <div>
+                        <div className="text-xs font-medium text-gray-500 mb-2">Mesajlar</div>
+                        <button
+                          type="button"
+                          onClick={() => { setIsMessagesOpen(true); setDrawerOpen(false); }}
+                          className="relative w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                        >
+                          Mesajlar
+                          {unreadMessagesCount > 0 && (
+                            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                              {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                    )}
+
                     {userRole === 'admin' && (
                       <div>
                         <button
@@ -2653,7 +2775,7 @@ function App() {
             )}
 
             {/* main: pad top only on mobile (fixed header). Desktop uses sidebar layout. */}
-            <main ref={mainScrollRef} className={`${showMobileHeader ? 'pt-20 sm:pt-24' : 'pt-6'} flex-1 overflow-y-auto w-full px-4 sm:px-6 lg:px-8 pb-20`}>
+            <main ref={mainScrollRef} className={`${showMobileHeader ? 'pt-28 sm:pt-32' : 'pt-6'} flex-1 overflow-y-auto w-full px-4 sm:px-6 lg:px-8 pb-20`}>
               {userCanView && (
                 <div className="mb-4">
                   <div className="grid grid-cols-1 gap-4">
@@ -3020,6 +3142,23 @@ function App() {
                   onClose={() => setIsTasksPanelOpen(false)}
                   userId={currentUser.id}
                   onStartTask={handleStartTask}
+                />
+              )}
+
+              {/* Messages Overlay */}
+              {canUseMessages && currentUser && userRole !== 'admin' && (
+                <MessagesOverlay
+                  isOpen={isMessagesOpen}
+                  onClose={() => setIsMessagesOpen(false)}
+                  currentUser={currentUser}
+                />
+              )}
+
+              {canUseMessages && currentUser && userRole === 'admin' && (
+                <AdminMessagesOverlay
+                  isOpen={isMessagesOpen}
+                  onClose={() => setIsMessagesOpen(false)}
+                  currentAdminId={String(currentUser.id)}
                 />
               )}
             </main>

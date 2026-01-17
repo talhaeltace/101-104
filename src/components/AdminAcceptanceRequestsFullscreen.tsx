@@ -237,18 +237,10 @@ export default function AdminAcceptanceRequestsFullscreen({
       return;
     }
 
-    const acceptedLocation: Location = {
-      ...updatedLocation,
-      details: {
-        ...updatedLocation.details,
-        isAccepted: true
-      }
-    };
-
     const before = acceptanceEditOriginalLocation ?? acceptanceEditLocation;
-    const changes = describeAcceptanceChanges(before, acceptedLocation);
+    const changes = describeAcceptanceChanges(before, updatedLocation);
 
-    const saved = await updateLocationFromAdmin(acceptedLocation);
+    const saved = await updateLocationFromAdmin(updatedLocation);
     if (!saved) return;
 
     const success = await approveAcceptanceRequest({
@@ -268,9 +260,9 @@ export default function AdminAcceptanceRequestsFullscreen({
       const changeText = changes.length ? changes.join(' • ') : 'Değişiklik yok';
       await logActivity({
         username: approvedBy,
-        action: `Kabul onayı: ${acceptedLocation.name} | Talep eden: ${requestedBy} | Onaylayan: ${approvedBy} | Değişenler: ${changeText}`,
-        location_id: String(acceptedLocation.id),
-        location_name: acceptedLocation.name,
+        action: `Kabul onayı: ${updatedLocation.name} | Talep eden: ${requestedBy} | Onaylayan: ${approvedBy} | Değişenler: ${changeText}`,
+        location_id: String(updatedLocation.id),
+        location_name: updatedLocation.name,
         activity_type: 'general'
       });
     } catch (e) {

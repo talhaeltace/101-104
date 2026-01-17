@@ -96,32 +96,7 @@ export const approveAcceptanceRequest = async (params: {
   adminUsername?: string;
 }): Promise<boolean> => {
   try {
-    // Fetch request so we know which location to update
-    const { data: requestRow, error: fetchError } = await supabase
-      .from('location_acceptance_requests')
-      .select('*')
-      .eq('id', params.requestId)
-      .maybeSingle();
-
-    if (fetchError || !requestRow) {
-      console.warn('approveAcceptanceRequest fetch error', fetchError);
-      return false;
-    }
-
-    const locationId = String(requestRow.location_id);
-
     const now = new Date().toISOString();
-
-    // Mark location accepted
-    const { error: locationError } = await supabase
-      .from('locations')
-      .update({ is_accepted: true, updated_at: now })
-      .eq('id', locationId);
-
-    if (locationError) {
-      console.warn('approveAcceptanceRequest location update error', locationError);
-      return false;
-    }
 
     // Mark request approved
     const { error: requestError } = await supabase

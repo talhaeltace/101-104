@@ -278,7 +278,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                    placeholder="Kullanıcı adınızı girin"
+                    placeholder=""
                     required
                   />
                 </div>
@@ -295,7 +295,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                    placeholder="••••••••"
+                    placeholder=""
                     required
                   />
                 </div>
@@ -433,7 +433,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     className="block w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                    placeholder="Adınız Soyadınız"
+                    placeholder=""
                     required
                   />
                 </div>
@@ -450,7 +450,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="block w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                    placeholder="ornek@email.com"
+                    placeholder=""
                     required
                   />
                 </div>
@@ -466,7 +466,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="block w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                    placeholder="kullanici_adi"
+                    placeholder=""
                     required
                   />
                 </div>
@@ -483,7 +483,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="block w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                    placeholder="••••••••"
+                    placeholder=""
                     required
                   />
                 </div>
@@ -500,7 +500,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     className="block w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                    placeholder="••••••••"
+                    placeholder=""
                     required
                   />
                 </div>

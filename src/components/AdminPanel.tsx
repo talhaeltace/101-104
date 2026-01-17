@@ -227,7 +227,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
             <svg className="w-6 h-6 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
-            <span className="truncate">Admin Paneli - Kullanıcı Yönetimi</span>
+            <span className="truncate">Admin Paneli</span>
           </h2>
           <button
             onClick={onClose}
@@ -289,176 +289,176 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                 </button>
               </div>
 
-              {/* Users (Desktop table) */}
-              <div className="hidden md:block rounded-lg border border-gray-200 overflow-hidden">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-gray-50 border-b">
-                      <th className="p-3 text-left text-sm font-semibold text-gray-600">Kullanıcı</th>
-                      <th className="p-3 text-left text-sm font-semibold text-gray-600">Rol</th>
-                      <th className="p-3 text-left text-sm font-semibold text-gray-600">Yetkiler</th>
-                      <th className="p-3 text-left text-sm font-semibold text-gray-600">Durum</th>
-                      <th className="p-3 text-left text-sm font-semibold text-gray-600">Kayıt Tarihi</th>
-                      <th className="p-3 text-center text-sm font-semibold text-gray-600">İşlemler</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  {/* Users (Desktop table) */}
+                  <div className="hidden md:block rounded-lg border border-gray-200 overflow-hidden">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="bg-gray-50 border-b">
+                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Kullanıcı</th>
+                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Rol</th>
+                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Yetkiler</th>
+                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Durum</th>
+                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Kayıt Tarihi</th>
+                          <th className="p-3 text-center text-sm font-semibold text-gray-600">İşlemler</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {users.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="p-8 text-center text-gray-500">
+                              Henüz kullanıcı bulunmuyor
+                            </td>
+                          </tr>
+                        ) : (
+                          users.map(user => (
+                            <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                              <td className="p-3">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold">
+                                    {user.username.charAt(0).toUpperCase()}
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-gray-900">{user.username}</div>
+                                    {user.full_name && <div className="text-sm text-gray-500">{user.full_name}</div>}
+                                    {user.email && <div className="text-xs text-gray-400">{user.email}</div>}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-3">
+                                <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
+                                  {user.role === 'admin' ? 'Admin' : user.role === 'editor' ? 'Editör' : user.role === 'viewer' ? 'Görüntüleyici' : 'Kullanıcı'}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                <div className="flex flex-wrap gap-1">
+                                  {user.can_view && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">Görüntüle</span>}
+                                  {user.can_edit && <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">Düzenle</span>}
+                                  {user.can_create && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">Ekle</span>}
+                                  {user.can_delete && <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs">Sil</span>}
+                                  {user.can_export && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">Dışa Aktar</span>}
+                                  {user.can_route && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs">Rota</span>}
+                                  {user.can_team_view && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs">Ekip</span>}
+                                </div>
+                              </td>
+                              <td className="p-3">
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${user.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                                  {user.is_active ? 'Aktif' : 'Pasif'}
+                                </span>
+                              </td>
+                              <td className="p-3 text-sm text-gray-500">
+                                {formatDate(user.created_at)}
+                              </td>
+                              <td className="p-3">
+                                <div className="flex justify-center gap-1">
+                                  <button
+                                    onClick={() => openEditModal(user)}
+                                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                    title="Düzenle"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                    </svg>
+                                  </button>
+                                  <button
+                                    onClick={() => openPermissionsModal(user)}
+                                    className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                                    title="Yetkiler"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                                    </svg>
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteUser(user.id)}
+                                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                                    title="Sil"
+                                    disabled={user.id === currentUserId}
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Users (Mobile cards) */}
+                  <div className="md:hidden space-y-3">
                     {users.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="p-8 text-center text-gray-500">
-                          Henüz kullanıcı bulunmuyor
-                        </td>
-                      </tr>
+                      <div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-sm text-gray-500">
+                        Henüz kullanıcı bulunmuyor
+                      </div>
                     ) : (
                       users.map(user => (
-                        <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="p-3">
-                            <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold">
-                                {user.username.charAt(0).toUpperCase()}
-                              </div>
-                              <div>
-                                <div className="font-medium text-gray-900">{user.username}</div>
-                                {user.full_name && <div className="text-sm text-gray-500">{user.full_name}</div>}
-                                {user.email && <div className="text-xs text-gray-400">{user.email}</div>}
-                              </div>
+                        <div key={user.id} className="rounded-lg border border-gray-200 bg-white p-3">
+                          <div className="flex items-start gap-3 min-w-0">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold shrink-0">
+                              {user.username.charAt(0).toUpperCase()}
                             </div>
-                          </td>
-                          <td className="p-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="font-medium text-gray-900 truncate">{user.username}</div>
+                              {user.full_name && <div className="text-sm text-gray-500 truncate">{user.full_name}</div>}
+                              {user.email && <div className="text-xs text-gray-400 truncate">{user.email}</div>}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
                             <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
                               {user.role === 'admin' ? 'Admin' : user.role === 'editor' ? 'Editör' : user.role === 'viewer' ? 'Görüntüleyici' : 'Kullanıcı'}
                             </span>
-                          </td>
-                          <td className="p-3">
-                            <div className="flex flex-wrap gap-1">
-                              {user.can_view && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">Görüntüle</span>}
-                              {user.can_edit && <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">Düzenle</span>}
-                              {user.can_create && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">Ekle</span>}
-                              {user.can_delete && <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs">Sil</span>}
-                              {user.can_export && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">Dışa Aktar</span>}
-                              {user.can_route && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs">Rota</span>}
-                              {user.can_team_view && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs">Ekip</span>}
-                            </div>
-                          </td>
-                          <td className="p-3">
                             <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${user.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
                               {user.is_active ? 'Aktif' : 'Pasif'}
                             </span>
-                          </td>
-                          <td className="p-3 text-sm text-gray-500">
-                            {formatDate(user.created_at)}
-                          </td>
-                          <td className="p-3">
-                            <div className="flex justify-center gap-1">
-                              <button
-                                onClick={() => openEditModal(user)}
-                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                title="Düzenle"
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => openPermissionsModal(user)}
-                                className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                                title="Yetkiler"
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => handleDeleteUser(user.id)}
-                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                                title="Sil"
-                                disabled={user.id === currentUserId}
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                            <span className="text-xs text-gray-500">{formatDate(user.created_at)}</span>
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap gap-1">
+                            {user.can_view && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">Görüntüle</span>}
+                            {user.can_edit && <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">Düzenle</span>}
+                            {user.can_create && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">Ekle</span>}
+                            {user.can_delete && <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs">Sil</span>}
+                            {user.can_export && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">Dışa Aktar</span>}
+                            {user.can_route && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs">Rota</span>}
+                            {user.can_team_view && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs">Ekip</span>}
+                          </div>
+
+                          <div className="mt-3 flex justify-end gap-2">
+                            <button
+                              onClick={() => openEditModal(user)}
+                              className="px-3 py-2 text-sm font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                            >
+                              Düzenle
+                            </button>
+                            <button
+                              onClick={() => openPermissionsModal(user)}
+                              className="px-3 py-2 text-sm font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
+                            >
+                              Yetkiler
+                            </button>
+                            <button
+                              onClick={() => handleDeleteUser(user.id)}
+                              className="px-3 py-2 text-sm font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50"
+                              disabled={user.id === currentUserId}
+                            >
+                              Sil
+                            </button>
+                          </div>
+                        </div>
                       ))
                     )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Users (Mobile cards) */}
-              <div className="md:hidden space-y-3">
-                {users.length === 0 ? (
-                  <div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-sm text-gray-500">
-                    Henüz kullanıcı bulunmuyor
                   </div>
-                ) : (
-                  users.map(user => (
-                    <div key={user.id} className="rounded-lg border border-gray-200 bg-white p-3">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold shrink-0">
-                          {user.username.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium text-gray-900 truncate">{user.username}</div>
-                          {user.full_name && <div className="text-sm text-gray-500 truncate">{user.full_name}</div>}
-                          {user.email && <div className="text-xs text-gray-400 truncate">{user.email}</div>}
-                        </div>
-                      </div>
 
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
-                          {user.role === 'admin' ? 'Admin' : user.role === 'editor' ? 'Editör' : user.role === 'viewer' ? 'Görüntüleyici' : 'Kullanıcı'}
-                        </span>
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${user.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                          {user.is_active ? 'Aktif' : 'Pasif'}
-                        </span>
-                        <span className="text-xs text-gray-500">{formatDate(user.created_at)}</span>
-                      </div>
-
-                      <div className="mt-3 flex flex-wrap gap-1">
-                        {user.can_view && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">Görüntüle</span>}
-                        {user.can_edit && <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">Düzenle</span>}
-                        {user.can_create && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">Ekle</span>}
-                        {user.can_delete && <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs">Sil</span>}
-                        {user.can_export && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">Dışa Aktar</span>}
-                        {user.can_route && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs">Rota</span>}
-                        {user.can_team_view && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs">Ekip</span>}
-                      </div>
-
-                      <div className="mt-3 flex justify-end gap-2">
-                        <button
-                          onClick={() => openEditModal(user)}
-                          className="px-3 py-2 text-sm font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
-                        >
-                          Düzenle
-                        </button>
-                        <button
-                          onClick={() => openPermissionsModal(user)}
-                          className="px-3 py-2 text-sm font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
-                        >
-                          Yetkiler
-                        </button>
-                        <button
-                          onClick={() => handleDeleteUser(user.id)}
-                          className="px-3 py-2 text-sm font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50"
-                          disabled={user.id === currentUserId}
-                        >
-                          Sil
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {/* User count */}
-              <div className="mt-4 text-sm text-gray-500">
-                Toplam {users.length} kullanıcı
-              </div>
+                  {/* User count */}
+                  <div className="mt-4 text-sm text-gray-500">
+                    Toplam {users.length} kullanıcı
+                  </div>
             </>
           )}
         </div>
@@ -483,7 +483,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                     value={newUser.username}
                     onChange={e => setNewUser({...newUser, username: e.target.value})}
                     className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="ornek_kullanici"
+                    placeholder=""
                   />
                 </div>
                 <div>
@@ -493,7 +493,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                     value={newUser.password}
                     onChange={e => setNewUser({...newUser, password: e.target.value})}
                     className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="••••••••"
+                    placeholder=""
                   />
                 </div>
                 <div>
@@ -516,7 +516,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                     value={newUser.fullName}
                     onChange={e => setNewUser({...newUser, fullName: e.target.value})}
                     className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Ahmet Yılmaz"
+                    placeholder=""
                   />
                 </div>
                 <div>
@@ -526,7 +526,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                     value={newUser.email}
                     onChange={e => setNewUser({...newUser, email: e.target.value})}
                     className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="ornek@email.com"
+                    placeholder=""
                   />
                 </div>
                 <div>
@@ -536,7 +536,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                     value={newUser.phone}
                     onChange={e => setNewUser({...newUser, phone: e.target.value})}
                     className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="0555 123 4567"
+                    placeholder=""
                   />
                 </div>
               </div>
@@ -589,7 +589,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                     value={editUser.password}
                     onChange={e => setEditUser({...editUser, password: e.target.value})}
                     className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="••••••••"
+                    placeholder=""
                   />
                 </div>
                 <div>

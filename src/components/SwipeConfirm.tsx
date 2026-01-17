@@ -26,11 +26,28 @@ const SwipeConfirm: React.FC<SwipeConfirmProps> = ({
   const maxDragRef = useRef(0);
 
   useEffect(() => {
-    if (containerRef.current && sliderRef.current) {
-      const containerWidth = containerRef.current.offsetWidth;
-      const sliderWidth = sliderRef.current.offsetWidth;
-      maxDragRef.current = containerWidth - sliderWidth - 8; // 8px padding
-    }
+    let raf = 0;
+
+    const measure = () => {
+      const container = containerRef.current;
+      const slider = sliderRef.current;
+      if (!container || !slider) return;
+      try {
+        const containerWidth = container.offsetWidth;
+        const sliderWidth = slider.offsetWidth;
+        maxDragRef.current = Math.max(0, containerWidth - sliderWidth - 8); // 8px padding
+      } catch {
+        // ignore
+      }
+    };
+
+    // Measure after layout settles
+    raf = window.requestAnimationFrame(measure);
+    window.addEventListener('resize', measure);
+    return () => {
+      try { window.cancelAnimationFrame(raf); } catch { /* ignore */ }
+      window.removeEventListener('resize', measure);
+    };
   }, []);
 
   const handleStart = (clientX: number) => {

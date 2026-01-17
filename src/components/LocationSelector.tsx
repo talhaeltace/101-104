@@ -83,13 +83,8 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   });
   const [isPressed, setIsPressed] = useState(false);
 
-  const [isFilterExpanded, setIsFilterExpanded] = useState(() => {
-    try {
-      return localStorage.getItem('location_selector_filter_expanded_v1') === '1';
-    } catch {
-      return false;
-    }
-  });
+  // Keep the filter panel always open (requested).
+  const isFilterExpanded = true;
 
   const [internalStatusFilters, setInternalStatusFilters] = useState<StatusFilterKey[]>([]);
   const effectiveStatusFilters = statusFiltersProp ?? internalStatusFilters;
@@ -98,9 +93,6 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     const unique = Array.from(new Set(next));
     if (onStatusFiltersChange) onStatusFiltersChange(unique);
     else setInternalStatusFilters(unique);
-
-    // Keep filter panel open while multi-selecting.
-    setIsFilterExpanded(true);
   };
 
   React.useEffect(() => {
@@ -110,14 +102,6 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
       /* ignore */
     }
   }, [isExpanded]);
-
-  React.useEffect(() => {
-    try {
-      localStorage.setItem('location_selector_filter_expanded_v1', isFilterExpanded ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [isFilterExpanded]);
 
   const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
   const isDirectorateLocation = (loc: Location) =>
@@ -216,6 +200,46 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   };
 
   const q = effectiveSearchTerm || '';
+
+  const statusCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const opt of FILTER_OPTIONS) counts[opt.key] = 0;
+
+    const baseAll = (selectedRegion === 0 && regions && regions.length > 0)
+      ? regions.flatMap(r => r.locations)
+      : locations;
+
+    // Exclude "Bölge Müdürlüğü" placeholder locations from counts/denominators.
+    // These are navigation/map helpers and should not inflate operational totals.
+    const base = baseAll.filter(loc => !isDirectorateLocation(loc));
+
+    for (const loc of base) {
+      if (!fieldsMatchQuery(q, loc.name, loc.center, loc.id)) continue;
+      for (const opt of FILTER_OPTIONS) {
+        try {
+          if (matchesOneStatus(opt.key, loc)) counts[opt.key] = (counts[opt.key] ?? 0) + 1;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    counts.__total = base.filter(loc => fieldsMatchQuery(q, loc.name, loc.center, loc.id)).length;
+    return counts;
+  }, [locations, regions, selectedRegion, q]);
+
+  const totalBaseCount = statusCounts.__total ?? 0;
+
+  const selectedFiltersSummary = React.useMemo(() => {
+    if (!effectiveStatusFilters || effectiveStatusFilters.length === 0) {
+      return `Tümü (${totalBaseCount})`;
+    }
+
+    const labelFor = (k: StatusFilterKey) => FILTER_OPTIONS.find(o => o.key === k)?.label ?? String(k);
+    return effectiveStatusFilters
+      .map((k) => `${labelFor(k)} (${statusCounts[k] ?? 0}/${totalBaseCount})`)
+      .join(', ');
+  }, [effectiveStatusFilters, statusCounts, totalBaseCount]);
   const filteredLocations = locations
     .filter(location => (fieldsMatchQuery(q, location.name, location.center, location.id)) && matchesStatus(location))
     .slice()
@@ -546,20 +570,18 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
           <label className="block text-xs font-medium text-gray-500 mb-1">Filtre</label>
           <button
             type="button"
-            onClick={() => setIsFilterExpanded(v => !v)}
+            onClick={() => {
+              // intentionally no-op: filter panel stays open
+            }}
             className="w-full flex items-center justify-between gap-2 text-sm border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400"
           >
             <div className="flex items-center gap-2 min-w-0">
               <Filter className="w-4 h-4 text-gray-500 flex-shrink-0" />
               <span className="truncate text-gray-700">
-                {effectiveStatusFilters.length === 0 ? 'Tümü' : `${effectiveStatusFilters.length} seçili`}
+                {selectedFiltersSummary}
               </span>
             </div>
-            {isFilterExpanded ? (
-              <ChevronUp className="w-4 h-4 text-gray-500" />
-            ) : (
-              <ChevronDown className="w-4 h-4 text-gray-500" />
-            )}
+            <ChevronUp className="w-4 h-4 text-gray-500" />
           </button>
 
           {isFilterExpanded && (
@@ -581,6 +603,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
                 className="h-4 w-4 rounded border-gray-300"
               />
               <span className="text-sm text-gray-800">Tümü</span>
+              <span className="ml-auto text-xs text-gray-500 tabular-nums">({totalBaseCount})</span>
             </button>
 
             <div className="my-1 h-px bg-gray-100" />
@@ -607,6 +630,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
                         className="h-4 w-4 rounded border-gray-300"
                       />
                       <span className="text-sm text-gray-800">{opt.label}</span>
+                      <span className="ml-auto text-xs text-gray-500 tabular-nums">({statusCounts[opt.key] ?? 0}/{totalBaseCount})</span>
                     </button>
                   );
                 })}
