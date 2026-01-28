@@ -127,7 +127,7 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
       } else {
         onClose();
       }
-    } catch (e) {
+    } catch {
       // onSave might throw synchronously
       onClose();
     }
@@ -182,30 +182,30 @@ const LocationEditModal: React.FC<LocationEditModalProps> = ({
       <div className="bg-white w-full h-full shadow-2xl overflow-hidden flex flex-col overscroll-contain">
         
         {/* Header */}
-        <div className="relative px-6 py-5 bg-slate-900 text-white border-b border-slate-800 flex-shrink-0">
+        <div className="relative px-6 py-5 bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center">
                 <MapPin className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-white">
+                <h2 className="text-xl font-bold text-gray-800">
                   {isCreate ? 'Yeni Lokasyon Oluştur' : 'Lokasyon Düzenle'}
                 </h2>
-                <p className="text-white/70 text-sm mt-1">{editedLocation.name || 'Lokasyon bilgilerini girin'}</p>
+                <p className="text-gray-500 text-sm mt-1">{editedLocation.name || 'Lokasyon bilgilerini girin'}</p>
               </div>
             </div>
             <button 
               onClick={onClose} 
-              className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
             >
-              <X className="w-5 h-5 text-white" />
+              <X className="w-5 h-5 text-gray-500" />
             </button>
           </div>
 
           {isEditor && (
-            <div className="mt-3 px-3 py-2 bg-amber-400/20 rounded-lg">
-              <p className="text-sm text-amber-100">⚠️ Editor yetkisi: Sadece Not alanını düzenleyebilirsiniz.</p>
+            <div className="mt-3 px-3 py-2 bg-amber-100 border border-amber-200 rounded-lg">
+              <p className="text-sm text-amber-700">⚠️ Editor yetkisi: Sadece Not alanını düzenleyebilirsiniz.</p>
             </div>
           )}
         </div>

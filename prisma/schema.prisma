@@ -1,0 +1,235 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model AppUser {
+  id            String   @id @db.Char(36)
+  username      String   @unique @db.VarChar(64)
+  password_hash String   @db.VarChar(255)
+  role          String   @db.VarChar(32)
+  full_name     String?  @db.VarChar(255)
+  email         String?  @db.VarChar(255)
+  phone         String?  @db.VarChar(64)
+
+  is_active     Boolean  @default(true)
+  otp_required  Boolean  @default(true)
+
+  created_at    DateTime @default(now())
+  last_login_at DateTime?
+
+  // Permissions (DB overrides role defaults in UI)
+  can_view       Boolean @default(false)
+  can_edit       Boolean @default(false)
+  can_create     Boolean @default(false)
+  can_delete     Boolean @default(false)
+  can_export     Boolean @default(false)
+  can_route      Boolean @default(false)
+  can_team_view  Boolean @default(false)
+  can_manual_gps Boolean @default(false)
+
+  @@index([role])
+}
+
+model LoginOtpChallenge {
+  id         String   @id @db.Char(36)
+  user_id    String   @db.Char(36)
+  email      String   @db.VarChar(255)
+  code_hash  String   @db.Char(64)
+  attempts   Int      @default(0)
+  created_at DateTime @default(now())
+  expires_at DateTime
+  consumed_at DateTime?
+
+  @@index([user_id])
+  @@index([expires_at])
+}
+
+model Location {
+  id          String   @id @db.VarChar(64)
+  project_id  String?  @db.VarChar(64)
+  organization_id String? @db.Char(36)
+  region_id   Int
+  name        String   @db.VarChar(255)
+  center      String?  @db.VarChar(255)
+  latitude    Float
+  longitude   Float
+  address     String?  @db.Text
+  note        String?  @db.Text
+  brand       String?  @db.VarChar(255)
+  model       String?  @db.VarChar(255)
+
+  has_gps     Boolean  @default(false)
+  has_rtu     Boolean  @default(false)
+  has_panos   Boolean  @default(false)
+
+  is_installed              Boolean @default(false)
+  has_card_access           Boolean @default(false)
+  is_installed_card_access  Boolean @default(false)
+  is_active_card_access     Boolean @default(false)
+  is_two_door_card_access   Boolean @default(false)
+
+  is_active      Boolean @default(false)
+  is_configured  Boolean @default(false)
+  is_accepted    Boolean @default(false)
+
+  security_firewall        Int @default(0)
+  network_switch           Int @default(0)
+  rtu_count                Int @default(0)
+  gps_card_antenna         Int @default(0)
+  rtu_panel                Int @default(0)
+  btp_panel                Int @default(0)
+  energy_analyzer          Int @default(0)
+  ykgc_count               Int @default(0)
+  teias_rtu_installation   Int @default(0)
+  indoor_dome_camera       Int @default(0)
+  network_video_management Int @default(0)
+  smart_control_unit       Int @default(0)
+  card_reader              Int @default(0)
+  network_recording_unit   Int @default(0)
+  access_control_system    Int @default(0)
+  transformer_center_type  String? @db.VarChar(255)
+
+  is_global Boolean @default(false)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([region_id])
+  @@index([project_id])
+}
+
+model Task {
+  id                   String   @id @db.Char(36)
+  title                String   @db.VarChar(255)
+  description          String?  @db.Text
+  created_at           DateTime @default(now())
+  created_by_user_id   String?  @db.Char(36)
+  created_by_username  String?  @db.VarChar(255)
+  assigned_to_user_id  String   @db.Char(36)
+  assigned_to_username String?  @db.VarChar(255)
+  region_id            Int?
+  region_name          String?  @db.VarChar(255)
+  route_location_ids   Json
+  status               String   @db.VarChar(32)
+  started_at           DateTime?
+  completed_at         DateTime?
+  cancelled_at         DateTime?
+
+  @@index([assigned_to_user_id])
+  @@index([status])
+}
+
+model TeamStatus {
+  user_id              String   @id @db.Char(36)
+  username             String   @db.VarChar(255)
+  status               String   @db.VarChar(32)
+
+  current_location_id   String?  @db.VarChar(64)
+  current_location_name String?  @db.VarChar(255)
+  next_location_name    String?  @db.VarChar(255)
+  total_route_count     Int      @default(0)
+  completed_count       Int      @default(0)
+  current_lat           Float?
+  current_lng           Float?
+
+  active_route         Json?
+  current_route_index  Int      @default(0)
+  is_working           Boolean  @default(false)
+  work_start_time      DateTime?
+
+  completed_locations   Json?
+  current_leg_start_time DateTime?
+  total_travel_minutes  Int? @default(0)
+  total_work_minutes    Int? @default(0)
+  today_completed_count Int? @default(0)
+  today_started_at      DateTime?
+  route_started_at      DateTime?
+
+  last_updated_at      DateTime @default(now())
+
+  @@index([status])
+  @@index([last_updated_at])
+}
+
+model AppMessage {
+  id             Int      @id @default(autoincrement())
+  created_at     DateTime @default(now())
+  user_id        String   @db.Char(36)
+  sender_user_id String   @db.Char(36)
+  body           String   @db.Text
+  is_read        Boolean  @default(false)
+  read_at        DateTime?
+
+  @@index([user_id])
+  @@index([created_at])
+  @@index([is_read])
+}
+
+model Activity {
+  id              Int      @id @default(autoincrement())
+  created_at      DateTime @default(now())
+  username        String   @db.VarChar(255)
+  action          String   @db.Text
+  location_id     String?  @db.VarChar(64)
+  location_name   String?  @db.VarChar(255)
+  arrival_time    DateTime?
+  completion_time DateTime?
+  duration_minutes Int?
+  activity_type   String   @db.VarChar(32)
+
+  @@index([created_at])
+  @@index([location_id])
+}
+
+model WorkEntry {
+  id            Int      @id @default(autoincrement())
+  created_at    DateTime @default(now())
+  user_id       String   @db.Char(36)
+  username      String   @db.VarChar(255)
+  location_id   String?  @db.VarChar(64)
+  location_name String?  @db.VarChar(255)
+  departed_at   DateTime?
+  arrived_at    DateTime
+  completed_at  DateTime
+  travel_minutes Int? @default(0)
+  work_minutes   Int? @default(0)
+
+  @@index([completed_at])
+  @@index([user_id])
+}
+
+model LocationAcceptanceRequest {
+  id                  Int      @id @default(autoincrement())
+  created_at           DateTime @default(now())
+  location_id          String   @db.VarChar(64)
+  location_name        String   @db.VarChar(255)
+  requested_by_user_id String   @db.Char(36)
+  requested_by_username String  @db.VarChar(255)
+  status               String   @db.VarChar(32)
+  reviewed_at          DateTime?
+  reviewed_by_user_id  String?  @db.Char(36)
+  reviewed_by_username String?  @db.VarChar(255)
+
+  @@index([status])
+  @@index([location_id])
+}
+
+model AppVersion {
+  id           Int      @id @default(autoincrement())
+  created_at   DateTime @default(now())
+  version_code Int
+  version_name String   @db.VarChar(64)
+  platform     String?  @db.VarChar(32)
+  store_url    String?  @db.Text
+  apk_url      String?  @db.Text
+  release_notes String? @db.Text
+  is_mandatory Boolean  @default(false)
+
+  @@index([version_code])
+  @@index([platform])
+}

@@ -1,6 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Users, MapPin, Navigation, CheckCircle2, Clock, X, RefreshCw, ChevronRight, Activity, Car, Briefcase, Timer, TrendingUp, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { 
+  Users, Navigation, CheckCircle2, Clock, X, RefreshCw, 
+  ChevronRight, Car, Briefcase, Timer, 
+  ListChecks, Search, Zap,
+  Eye, UserCheck, Route, Play, AlertCircle
+} from 'lucide-react';
+import { apiFetch } from '../lib/apiClient';
 import type { Region } from '../data/regions';
 import { createTask, type Task } from '../lib/tasks';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
@@ -11,7 +16,7 @@ export interface TeamMemberStatus {
   user_id: string;
   username: string;
   status: 'idle' | 'yolda' | 'adreste' | 'tamamladi';
-  current_location_id: number | null;
+  current_location_id: string | null;
   current_location_name: string | null;
   next_location_name: string | null;
   total_route_count: number;
@@ -20,7 +25,6 @@ export interface TeamMemberStatus {
   current_lng: number | null;
   last_updated_at: string;
   route_started_at: string | null;
-  // New detailed tracking fields
   completed_locations: CompletedLocationRecord[] | null;
   current_leg_start_time: string | null;
   total_travel_minutes: number;
@@ -50,34 +54,38 @@ interface Props {
   regions: Region[];
 }
 
-const statusLabels: Record<string, { label: string; color: string; bgColor: string; dotColor: string; icon: React.ReactNode }> = {
+const statusConfig: Record<string, { label: string; color: string; bgColor: string; borderColor: string; dotColor: string; icon: React.ElementType }> = {
   idle: {
     label: 'Beklemede',
-    color: 'text-gray-600',
-    bgColor: 'bg-gray-100',
-    dotColor: 'bg-gray-400',
-    icon: <Clock className="w-4 h-4" />
+    color: 'text-slate-400',
+    bgColor: 'bg-slate-500/20',
+    borderColor: 'border-slate-500/30',
+    dotColor: 'bg-slate-400',
+    icon: Clock
   },
   yolda: {
     label: 'Yolda',
-    color: 'text-blue-600',
-    bgColor: 'bg-blue-100',
+    color: 'text-blue-400',
+    bgColor: 'bg-blue-500/20',
+    borderColor: 'border-blue-500/30',
     dotColor: 'bg-blue-500',
-    icon: <Navigation className="w-4 h-4" />
+    icon: Car
   },
   adreste: {
     label: 'Adreste',
-    color: 'text-orange-600',
-    bgColor: 'bg-orange-100',
-    dotColor: 'bg-orange-500',
-    icon: <MapPin className="w-4 h-4" />
+    color: 'text-amber-400',
+    bgColor: 'bg-amber-500/20',
+    borderColor: 'border-amber-500/30',
+    dotColor: 'bg-amber-500',
+    icon: Briefcase
   },
   tamamladi: {
     label: 'Tamamladı',
-    color: 'text-green-600',
-    bgColor: 'bg-green-100',
-    dotColor: 'bg-green-500',
-    icon: <CheckCircle2 className="w-4 h-4" />
+    color: 'text-emerald-400',
+    bgColor: 'bg-emerald-500/20',
+    borderColor: 'border-emerald-500/30',
+    dotColor: 'bg-emerald-500',
+    icon: CheckCircle2
   }
 };
 
@@ -113,16 +121,22 @@ const formatTime = (isoString: string) => {
   return new Date(isoString).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 };
 
+type FilterType = 'all' | 'active' | 'idle';
+
 const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUserId, currentUsername, regions }) => {
   const [teamMembers, setTeamMembers] = useState<TeamMemberStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterType>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expandedMemberId, setExpandedMemberId] = useState<string | null>(null);
+  
   useBodyScrollLock(isOpen);
-
   const panelRef = useRef<HTMLDivElement>(null);
 
   const [memberCurrentTask, setMemberCurrentTask] = useState<Record<string, Task | null>>({});
 
+  // Task details modal
   const [isTaskDetailsOpen, setIsTaskDetailsOpen] = useState(false);
   const [taskDetailsMember, setTaskDetailsMember] = useState<TeamMemberStatus | null>(null);
   const [taskDetailsTask, setTaskDetailsTask] = useState<Task | null>(null);
@@ -133,203 +147,90 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
   const [taskRegionId, setTaskRegionId] = useState<number>(0);
   const [taskTitle, setTaskTitle] = useState<string>('');
   const [taskDescription, setTaskDescription] = useState<string>('');
-  const [taskSearch, setTaskSearch] = useState<string>('');
   const [selectedTaskLocationIds, setSelectedTaskLocationIds] = useState<string[]>([]);
   const [assigningTask, setAssigningTask] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
 
+  const fetchCurrentTasksForMembers = useCallback(async (members: TeamMemberStatus[]) => {
+    try {
+      const userIds = (members || []).map(m => m.user_id).filter(Boolean);
+      if (userIds.length === 0) { setMemberCurrentTask({}); return; }
+      const qs = new URLSearchParams({ user_ids: userIds.join(',') });
+      const res = await apiFetch(`/tasks/active?${qs.toString()}`);
+      const data = ((res as any)?.data ?? []) as any[];
+      const byUser: Record<string, Task | null> = {};
+      for (const uid of userIds) byUser[uid] = null;
+      const rows: Task[] = (data || []).map((r: any) => ({
+        id: r.id, title: r.title, description: r.description, createdAt: r.created_at,
+        createdByUserId: r.created_by_user_id, createdByUsername: r.created_by_username,
+        assignedToUserId: r.assigned_to_user_id, assignedToUsername: r.assigned_to_username,
+        regionId: r.region_id, regionName: r.region_name,
+        routeLocationIds: Array.isArray(r.route_location_ids) ? r.route_location_ids : [],
+        status: r.status, startedAt: r.started_at, completedAt: r.completed_at, cancelledAt: r.cancelled_at
+      }));
+      for (const t of rows) {
+        const uid = t.assignedToUserId;
+        const existing = byUser[uid];
+        if (!existing) { byUser[uid] = t; continue; }
+        if (existing.status !== 'in_progress' && t.status === 'in_progress') byUser[uid] = t;
+      }
+      setMemberCurrentTask(byUser);
+    } catch (e) { console.warn('fetchCurrentTasksForMembers exception', e); }
+  }, []);
+
   // Fetch team status
-  const fetchTeamStatus = async () => {
+  const fetchTeamStatus = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      
-      const { data, error: fetchError } = await supabase
-        .from('team_status')
-        .select('*')
-        .order('status', { ascending: true })
-        .order('last_updated_at', { ascending: false });
-      
-      if (fetchError) {
-        console.error('Team status fetch error:', fetchError);
-        setError('Ekip durumu yüklenemedi');
-        return;
-      }
-      
-      // Sort: active members first, then idle
+      const res = await apiFetch('/team-status');
+      const data = ((res as any)?.data ?? []) as any[];
       const sorted = (data || []).sort((a, b) => {
         if (a.status === 'idle' && b.status !== 'idle') return 1;
         if (a.status !== 'idle' && b.status === 'idle') return -1;
         return new Date(b.last_updated_at).getTime() - new Date(a.last_updated_at).getTime();
       });
-      
       setTeamMembers(sorted);
+      fetchCurrentTasksForMembers(sorted);
     } catch (err) {
       console.error('Team status error:', err);
       setError('Bir hata oluştu');
     } finally {
       setLoading(false);
     }
-  };
+  }, [fetchCurrentTasksForMembers]);
 
-  const fetchCurrentTasksForMembers = async (members: TeamMemberStatus[]) => {
-    try {
-      const userIds = (members || []).map(m => m.user_id).filter(Boolean);
-      if (userIds.length === 0) {
-        setMemberCurrentTask({});
-        return;
-      }
-
-      const { data, error: fetchError } = await supabase
-        .from('tasks')
-        .select('*')
-        .in('assigned_to_user_id', userIds)
-        .in('status', ['assigned', 'in_progress'])
-        .order('created_at', { ascending: false })
-        .limit(500);
-
-      if (fetchError) {
-        console.warn('fetchCurrentTasksForMembers error', fetchError);
-        return;
-      }
-
-      const byUser: Record<string, Task | null> = {};
-      for (const uid of userIds) byUser[uid] = null;
-
-      const rows: Task[] = (data || []).map((r: any) => ({
-        id: r.id,
-        title: r.title,
-        description: r.description,
-        createdAt: r.created_at,
-        createdByUserId: r.created_by_user_id,
-        createdByUsername: r.created_by_username,
-        assignedToUserId: r.assigned_to_user_id,
-        assignedToUsername: r.assigned_to_username,
-        regionId: r.region_id,
-        regionName: r.region_name,
-        routeLocationIds: Array.isArray(r.route_location_ids) ? r.route_location_ids : [],
-        status: r.status,
-        startedAt: r.started_at,
-        completedAt: r.completed_at,
-        cancelledAt: r.cancelled_at
-      }));
-
-      // Prefer in_progress; otherwise newest assigned
-      for (const t of rows) {
-        const uid = t.assignedToUserId;
-        const existing = byUser[uid];
-        if (!existing) {
-          byUser[uid] = t;
-          continue;
-        }
-        if (existing.status !== 'in_progress' && t.status === 'in_progress') {
-          byUser[uid] = t;
-        }
-      }
-
-      setMemberCurrentTask(byUser);
-    } catch (e) {
-      console.warn('fetchCurrentTasksForMembers exception', e);
-    }
-  };
-
-  // Initial fetch and real-time subscription
   useEffect(() => {
     if (!isOpen) return;
-    
     fetchTeamStatus();
-    
-    // Subscribe to real-time updates
-    const channel = supabase
-      .channel('team_status_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'team_status'
-        },
-        () => {
-          fetchTeamStatus();
-        }
-      )
-      .subscribe();
-
-    const tasksChannel = supabase
-      .channel('tasks_changes_team_panel')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'tasks'
-        },
-        () => {
-          // refresh current tasks snapshot for visible members
-          fetchCurrentTasksForMembers(teamMembers);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-      supabase.removeChannel(tasksChannel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+  }, [fetchTeamStatus, isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
-    fetchCurrentTasksForMembers(teamMembers);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, teamMembers]);
-
-  // Auto-refresh every 30 seconds
-  useEffect(() => {
-    if (!isOpen) return;
-    
-    const interval = setInterval(() => {
-      fetchTeamStatus();
-    }, 30000);
-    
+    const interval = setInterval(() => fetchTeamStatus(), 30000);
     return () => clearInterval(interval);
-  }, [isOpen]);
+  }, [fetchTeamStatus, isOpen]);
 
-  // Close on click outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
-        onClose();
-      }
-    };
+  // Stats
+  const activeMembers = teamMembers.filter(m => m.status !== 'idle');
+  const idleMembers = teamMembers.filter(m => m.status === 'idle');
+  const totalTodayCompleted = teamMembers.reduce((sum, m) => sum + (m.today_completed_count || 0), 0);
+  const totalInRoute = teamMembers.reduce((sum, m) => sum + (m.total_route_count || 0), 0);
 
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
+  // Filtered members
+  const visibleMembers = teamMembers.filter(m => {
+    if (filter === 'active' && m.status === 'idle') return false;
+    if (filter === 'idle' && m.status !== 'idle') return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      if (!m.username.toLowerCase().includes(q)) return false;
     }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
-
-  const selectedRegion = regions.find(r => r.id === taskRegionId);
-  const selectedRegionLocations = selectedRegion?.locations ?? [];
-  const sortedRegionLocations = selectedRegionLocations
-    .slice()
-    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'tr', { sensitivity: 'base', numeric: true }));
-
-  const filteredRegionLocations = sortedRegionLocations.filter((l) => {
-    const q = taskSearch.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      String(l.name || '').toLowerCase().includes(q) ||
-      String(l.center || '').toLowerCase().includes(q) ||
-      String(l.id || '').toLowerCase().includes(q)
-    );
+    return true;
   });
 
-  const isAllSelectedInRegion = selectedRegionLocations.length > 0 && selectedTaskLocationIds.length === selectedRegionLocations.length;
+  // Task assignment handlers
+  const selectedRegion = regions.find(r => r.id === taskRegionId);
+  const selectedRegionLocations = selectedRegion?.locations ?? [];
 
   const openAssignTaskModal = (member: TeamMemberStatus) => {
     if (!currentUserId) return;
@@ -340,7 +241,6 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
     const defaultRegionName = regions?.find(r => r.id === defaultRegionId)?.name ?? '';
     setTaskTitle(defaultRegionName ? `${defaultRegionName} Görevi` : 'Görev');
     setTaskDescription('');
-    setTaskSearch('');
     const defaultLocs = regions?.find(r => r.id === defaultRegionId)?.locations ?? [];
     setSelectedTaskLocationIds(defaultLocs.map(l => String(l.id)));
     setIsAssignTaskModalOpen(true);
@@ -356,36 +256,15 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
   const handleAssignTask = async () => {
     if (!currentUserId || !taskMember) return;
     setAssignError(null);
-
-    if (!taskRegionId || taskRegionId === 0) {
-      setAssignError('Bölge seçiniz');
-      return;
-    }
-
+    if (!taskRegionId || taskRegionId === 0) { setAssignError('Bölge seçiniz'); return; }
     const region = selectedRegion;
     const regionLocations = selectedRegionLocations;
-    if (!region || regionLocations.length === 0) {
-      setAssignError('Seçilen bölgede lokasyon bulunamadı');
-      return;
-    }
-
+    if (!region || regionLocations.length === 0) { setAssignError('Seçilen bölgede lokasyon bulunamadı'); return; }
     const selectedSet = new Set(selectedTaskLocationIds.map(String));
     const selectedLocations = regionLocations.filter(l => selectedSet.has(String(l.id)));
-    if (selectedLocations.length === 0) {
-      setAssignError('En az 1 lokasyon seçmelisiniz');
-      return;
-    }
-
-    const routeLocationIds = selectedLocations
-      .slice()
-      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'tr', { sensitivity: 'base', numeric: true }))
-      .map(l => l.id);
-
-    if (routeLocationIds.length === 0) {
-      setAssignError('Görev rotası boş olamaz');
-      return;
-    }
-
+    if (selectedLocations.length === 0) { setAssignError('En az 1 lokasyon seçmelisiniz'); return; }
+    const routeLocationIds = selectedLocations.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'tr', { sensitivity: 'base', numeric: true })).map(l => l.id);
+    if (routeLocationIds.length === 0) { setAssignError('Görev rotası boş olamaz'); return; }
     setAssigningTask(true);
     try {
       const result = await createTask({
@@ -399,21 +278,11 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
         regionName: region.name,
         routeLocationIds
       });
-
-      if (!result.success) {
-        setAssignError(result.error || 'Görev atanamadı');
-        return;
-      }
-
-      // Refresh task badges immediately
+      if (!result.success) { setAssignError(result.error || 'Görev atanamadı'); return; }
       fetchCurrentTasksForMembers(teamMembers);
       closeAssignTaskModal();
-    } catch (e) {
-      console.warn('handleAssignTask failed', e);
-      setAssignError('Görev atanamadı');
-    } finally {
-      setAssigningTask(false);
-    }
+    } catch { setAssignError('Görev atanamadı'); } 
+    finally { setAssigningTask(false); }
   };
 
   const openTaskDetails = (member: TeamMemberStatus) => {
@@ -430,192 +299,400 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
     setTaskDetailsTask(null);
   };
 
-  const activeMembers = teamMembers.filter(m => m.status !== 'idle');
-  const idleMembers = teamMembers.filter(m => m.status === 'idle');
-  const totalTodayCompleted = teamMembers.reduce((sum, m) => sum + (m.today_completed_count || 0), 0);
-  const totalInRoute = teamMembers.reduce((sum, m) => sum + (m.total_route_count || 0), 0);
+  if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[1200] bg-black/40">
-      <div 
-        ref={panelRef}
-        className="bg-white w-full h-full flex flex-col overflow-hidden overscroll-contain"
-      >
+    <div className="fixed inset-0 z-[99999] bg-gray-50 overflow-hidden">
+      <div ref={panelRef} className="w-full h-full flex flex-col overflow-hidden">
+        
         {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-800 bg-slate-900 text-white">
-          <div className="flex items-center gap-3 sm:gap-4">
-            <div className="p-2 sm:p-3 bg-white/20 rounded-xl">
-              <Users className="w-5 h-5 sm:w-6 sm:h-6" />
+        <header className="shrink-0 bg-white border-b border-gray-200 shadow-sm safe-area-top">
+          <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <div className="p-2 sm:p-2.5 bg-gradient-to-br from-cyan-500 to-cyan-600 rounded-lg sm:rounded-xl shadow-sm shrink-0">
+                <Users className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-base sm:text-lg font-bold text-gray-800 truncate">Ekip Durumu</h1>
+                <p className="text-[10px] sm:text-xs text-gray-500">{teamMembers.length} ekip üyesi</p>
+              </div>
             </div>
-            <div>
-              <h2 className="font-bold text-lg sm:text-xl">Saha Ekibi Takip</h2>
-              <p className="text-xs sm:text-sm text-white/80">{teamMembers.length} ekip üyesi</p>
-            </div>
-          </div>
-          
-          {/* Stats in header */}
-          <div className="hidden sm:flex items-center gap-6">
-            <div className="text-center">
-              <div className="text-2xl font-bold">{activeMembers.length}</div>
-              <div className="text-xs text-white/70">Aktif</div>
-            </div>
-            <div className="w-px h-10 bg-white/20"></div>
-            <div className="text-center">
-              <div className="text-2xl font-bold">{totalTodayCompleted}</div>
-              <div className="text-xs text-white/70">Tamamlanan</div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={fetchTeamStatus}
-              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-              title="Yenile"
-            >
-              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-            </button>
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Summary Stats Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-4 p-3 sm:p-4 bg-gray-50 border-b border-gray-200">
-          <div className="flex items-center gap-2 bg-white rounded-lg p-2 shadow-sm">
-            <div className="p-1.5 bg-green-100 rounded-lg">
-              <Activity className="w-4 h-4 text-green-600" />
-            </div>
-            <div>
-              <div className="text-xs text-gray-500">Aktif</div>
-              <div className="text-sm font-bold text-gray-800">{activeMembers.length} kişi</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 bg-white rounded-lg p-2 shadow-sm">
-            <div className="p-1.5 bg-blue-100 rounded-lg">
-              <CheckCircle2 className="w-4 h-4 text-blue-600" />
-            </div>
-            <div>
-              <div className="text-xs text-gray-500">Tamamlanan</div>
-              <div className="text-sm font-bold text-gray-800">{totalTodayCompleted} yer</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 bg-white rounded-lg p-2 shadow-sm col-span-2 sm:col-span-1">
-            <div className="p-1.5 bg-gray-200 rounded-lg">
-              <TrendingUp className="w-4 h-4 text-gray-700" />
-            </div>
-            <div>
-              <div className="text-xs text-gray-500">Rotadaki</div>
-              <div className="text-sm font-bold text-gray-800">{totalInRoute} yer</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
-          {loading && teamMembers.length === 0 ? (
-            <div className="flex items-center justify-center py-12">
-              <RefreshCw className="w-8 h-8 animate-spin text-indigo-400" />
-            </div>
-          ) : error ? (
-            <div className="text-center py-12 text-red-500">
-              <p>{error}</p>
+            
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               <button
                 onClick={fetchTeamStatus}
-                className="mt-2 text-sm text-indigo-600 hover:underline"
+                disabled={loading}
+                className="p-1.5 sm:p-2 hover:bg-gray-100 rounded-lg sm:rounded-xl text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
               >
-                Tekrar dene
+                <RefreshCw className={`w-4 h-4 sm:w-5 sm:h-5 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+              <button onClick={onClose} className="p-1.5 sm:p-2 hover:bg-gray-100 rounded-lg sm:rounded-xl text-gray-500 hover:text-gray-700 transition-colors">
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
-          ) : teamMembers.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              <Users className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-              <p className="text-lg">Henüz ekip üyesi yok</p>
-              <p className="text-sm text-gray-400 mt-1">Editör kullanıcıları giriş yaptığında burada görünecek</p>
+          </div>
+
+          {/* Stats Cards - 2x2 on mobile, 4 cols on larger */}
+          <div className="px-3 sm:px-4 pb-3 sm:pb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">
+              <div className="bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-gray-200/60">
+                <div className="flex items-center gap-1 sm:gap-2 mb-0.5 sm:mb-1">
+                  <Users className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
+                  <span className="text-[9px] sm:text-[10px] uppercase tracking-wide text-gray-500">Toplam</span>
+                </div>
+                <div className="text-lg sm:text-xl font-bold text-gray-800">{teamMembers.length}</div>
+              </div>
+              <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-emerald-200/60">
+                <div className="flex items-center gap-1 sm:gap-2 mb-0.5 sm:mb-1">
+                  <Zap className="w-3 h-3 sm:w-4 sm:h-4 text-emerald-600" />
+                  <span className="text-[9px] sm:text-[10px] uppercase tracking-wide text-emerald-600">Aktif</span>
+                </div>
+                <div className="text-lg sm:text-xl font-bold text-emerald-600">{activeMembers.length}</div>
+              </div>
+              <div className="bg-gradient-to-br from-blue-50 to-blue-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-blue-200/60">
+                <div className="flex items-center gap-1 sm:gap-2 mb-0.5 sm:mb-1">
+                  <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4 text-blue-600" />
+                  <span className="text-[9px] sm:text-[10px] uppercase tracking-wide text-blue-600 truncate">Tamamlanan</span>
+                </div>
+                <div className="text-lg sm:text-xl font-bold text-blue-600">{totalTodayCompleted}</div>
+              </div>
+              <div className="bg-gradient-to-br from-purple-50 to-purple-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-purple-200/60">
+                <div className="flex items-center gap-1 sm:gap-2 mb-0.5 sm:mb-1">
+                  <Route className="w-3 h-3 sm:w-4 sm:h-4 text-purple-600" />
+                  <span className="text-[9px] sm:text-[10px] uppercase tracking-wide text-purple-600">Rotada</span>
+                </div>
+                <div className="text-lg sm:text-xl font-bold text-purple-600">{totalInRoute}</div>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Search & Filter Bar */}
+        <div className="shrink-0 px-3 sm:px-4 py-2.5 sm:py-3 bg-gray-50 border-b border-gray-200">
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+            <div className="flex-1 relative">
+              <Search className="absolute left-2.5 sm:left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400" />
+              <input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Üye ara..."
+                className="w-full pl-8 sm:pl-10 pr-3 sm:pr-4 py-2 sm:py-2.5 bg-white border border-gray-200 rounded-lg sm:rounded-xl text-gray-800 placeholder-gray-400 text-xs sm:text-sm focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 transition-all"
+              />
+            </div>
+            <div className="flex rounded-lg sm:rounded-xl overflow-hidden border border-gray-200 self-start">
+              {([
+                { key: 'all', label: 'Tümü' },
+                { key: 'active', label: 'Aktif' },
+                { key: 'idle', label: 'Bekleyen' }
+              ] as { key: FilterType; label: string }[]).map(f => (
+                <button
+                  key={f.key}
+                  onClick={() => setFilter(f.key)}
+                  className={`px-2.5 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-medium transition-colors ${
+                    filter === f.key 
+                      ? 'bg-cyan-600 text-white' 
+                      : 'bg-white text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Team List */}
+        <div className="flex-1 overflow-y-auto p-2.5 sm:p-4 bg-gray-50 overflow-x-hidden">
+          {error ? (
+            <div className="flex flex-col items-center justify-center py-12 sm:py-16">
+              <div className="p-3 sm:p-4 bg-gradient-to-br from-red-50 to-red-100 rounded-2xl mb-3 shadow-sm">
+                <AlertCircle className="w-10 h-10 sm:w-12 sm:h-12 text-red-500" />
+              </div>
+              <p className="text-red-600 font-medium text-sm sm:text-base">{error}</p>
+              <button onClick={fetchTeamStatus} className="mt-3 sm:mt-4 px-4 py-2 bg-white text-gray-700 rounded-lg sm:rounded-xl text-xs sm:text-sm font-medium hover:bg-gray-100 border border-gray-200 shadow-sm">
+                Tekrar Dene
+              </button>
+            </div>
+          ) : loading && teamMembers.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 sm:py-16">
+              <div className="relative">
+                <div className="absolute inset-0 bg-cyan-500/20 rounded-full blur-xl animate-pulse" />
+                <RefreshCw className="relative w-10 h-10 sm:w-12 sm:h-12 animate-spin text-cyan-600" />
+              </div>
+              <p className="text-gray-500 mt-4 text-sm sm:text-base">Ekip durumu yükleniyor...</p>
+            </div>
+          ) : visibleMembers.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 sm:py-16">
+              <div className="p-3 sm:p-4 bg-gradient-to-br from-gray-50 to-gray-100 rounded-2xl mb-3 shadow-sm">
+                <Users className="w-10 h-10 sm:w-12 sm:h-12 text-gray-400" />
+              </div>
+              <p className="text-base sm:text-lg font-medium text-gray-500 text-center">
+                {filter !== 'all' ? 'Bu filtrede üye yok' : 'Henüz ekip üyesi yok'}
+              </p>
             </div>
           ) : (
-            <div className="space-y-6">
-              {/* Active Members Section */}
-              {activeMembers.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
-                    <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">
-                      Aktif Üyeler ({activeMembers.length})
-                    </h3>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {activeMembers.map((member) => (
-                      <TeamMemberCard 
-                        key={member.id} 
-                        member={member} 
-                        onFocus={onFocusMember}
-                        currentTask={memberCurrentTask[member.user_id] ?? null}
-                        onAssignTask={currentUserId ? () => openAssignTaskModal(member) : undefined}
-                        onOpenTaskDetails={() => openTaskDetails(member)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
+            <div className="space-y-2 sm:space-y-3">
+              {visibleMembers.map((member) => {
+                const config = statusConfig[member.status] || statusConfig.idle;
+                const StatusIcon = config.icon;
+                const isActive = member.status !== 'idle';
+                const isExpanded = expandedMemberId === member.id;
+                const currentTask = memberCurrentTask[member.user_id] ?? null;
+                const completedLocations = member.completed_locations || [];
+                const currentDuration = formatLiveDuration(member.current_leg_start_time);
 
-              {/* Idle Members Section */}
-              {idleMembers.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="w-2.5 h-2.5 bg-gray-400 rounded-full"></span>
-                    <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider">
-                      Bekleyen Üyeler ({idleMembers.length})
-                    </h3>
+                return (
+                  <div 
+                    key={member.id} 
+                    className={`rounded-xl sm:rounded-2xl border transition-all duration-200 overflow-hidden shadow-sm hover:shadow-md ${
+                      isActive 
+                        ? `bg-white ${config.borderColor}` 
+                        : 'bg-white border-gray-200'
+                    }`}
+                  >
+                    {/* Member Card Header */}
+                    <div 
+                      className="p-2.5 sm:p-4 cursor-pointer"
+                      onClick={() => setExpandedMemberId(isExpanded ? null : member.id)}
+                    >
+                      <div className="flex items-start gap-2 sm:gap-3">
+                        {/* Avatar */}
+                        <div className="relative shrink-0">
+                          <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl flex items-center justify-center text-white font-bold text-base sm:text-lg shadow-sm ${
+                            isActive ? 'bg-gradient-to-br from-cyan-500 to-cyan-600' : 'bg-gray-400'
+                          }`}>
+                            {member.username.charAt(0).toUpperCase()}
+                          </div>
+                          <span className={`absolute -bottom-0.5 -right-0.5 sm:-bottom-1 sm:-right-1 w-3 h-3 sm:w-4 sm:h-4 rounded-full border-2 border-white ${config.dotColor} ${isActive ? 'animate-pulse' : ''}`} />
+                        </div>
+
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 sm:gap-2 mb-0.5 sm:mb-1">
+                            <h3 className="font-semibold text-gray-800 truncate text-sm sm:text-base">{member.username}</h3>
+                            {isActive && (
+                              <span className={`px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-[10px] font-bold uppercase tracking-wide rounded-full shrink-0 ${config.bgColor} ${config.color}`}>
+                                {config.label}
+                              </span>
+                            )}
+                          </div>
+                          
+                          <div className="flex flex-wrap items-center gap-x-2 sm:gap-x-3 gap-y-0.5 text-[10px] sm:text-xs text-gray-500">
+                            <span className="flex items-center gap-0.5 sm:gap-1">
+                              <Clock className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                              {formatTimeAgo(member.last_updated_at)}
+                            </span>
+                            {member.today_completed_count > 0 && (
+                              <span className="flex items-center gap-0.5 sm:gap-1 text-emerald-600">
+                                <CheckCircle2 className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                                {member.today_completed_count} tamamlandı
+                              </span>
+                            )}
+                            {member.total_route_count > 0 && (
+                              <span className="flex items-center gap-0.5 sm:gap-1 text-purple-600">
+                                <Route className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                                {member.completed_count}/{member.total_route_count}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="shrink-0 flex items-center gap-1 sm:gap-2">
+                          {isActive && member.current_lat && member.current_lng && onFocusMember && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onFocusMember(member.id, member.username, member.current_lat!, member.current_lng!);
+                                onClose();
+                              }}
+                              className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-cyan-50 text-cyan-600 hover:bg-cyan-100 transition-colors"
+                              title="Haritada göster"
+                            >
+                              <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                            </button>
+                          )}
+                          <ChevronRight className={`w-4 h-4 sm:w-5 sm:h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                        </div>
+                      </div>
+
+                      {/* Active Status Card */}
+                      {isActive && member.current_location_name && (
+                        <div className={`mt-2 sm:mt-3 p-2 sm:p-3 rounded-lg sm:rounded-xl ${config.bgColor} border ${config.borderColor}`}>
+                          <div className="flex items-center gap-1.5 sm:gap-2 mb-0.5 sm:mb-1">
+                            <StatusIcon className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${config.color}`} />
+                            <span className={`text-[10px] sm:text-xs font-semibold uppercase ${config.color}`}>
+                              {member.status === 'yolda' ? 'Yolda' : 'Çalışıyor'}
+                            </span>
+                            {currentDuration && (
+                              <span className={`ml-auto text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full font-bold ${config.bgColor} ${config.color}`}>
+                                <Timer className="w-2.5 h-2.5 sm:w-3 sm:h-3 inline mr-0.5 sm:mr-1" />{currentDuration}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs sm:text-sm font-semibold text-gray-800 truncate">{member.current_location_name}</div>
+                          {member.next_location_name && (
+                            <div className="flex items-center gap-0.5 sm:gap-1 mt-0.5 sm:mt-1 text-[10px] sm:text-xs text-gray-500">
+                              <ChevronRight className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                              <span className="truncate">Sonra: {member.next_location_name}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Progress Bar */}
+                      {member.total_route_count > 0 && (
+                        <div className="mt-2 sm:mt-3">
+                          <div className="flex items-center justify-between text-[10px] sm:text-xs mb-0.5 sm:mb-1">
+                            <span className="text-gray-500">Rota İlerlemesi</span>
+                            <span className="font-bold text-gray-800">{member.completed_count} / {member.total_route_count}</span>
+                          </div>
+                          <div className="h-1.5 sm:h-2 bg-gray-200 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-500"
+                              style={{ width: `${(member.completed_count / member.total_route_count) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Expanded Content */}
+                    {isExpanded && (
+                      <div className="px-2.5 sm:px-4 pb-2.5 sm:pb-4 border-t border-gray-100">
+                        <div className="pt-2.5 sm:pt-4 space-y-2 sm:space-y-3">
+                          
+                          {/* Task Buttons */}
+                          <div className="flex gap-1.5 sm:gap-2">
+                            {currentTask ? (
+                              <button
+                                onClick={() => openTaskDetails(member)}
+                                className="flex-1 px-3 sm:px-4 py-2 sm:py-2.5 bg-emerald-50 text-emerald-600 rounded-lg sm:rounded-xl text-xs sm:text-sm font-semibold hover:bg-emerald-100 flex items-center justify-center gap-1.5 sm:gap-2 border border-emerald-200"
+                              >
+                                <ListChecks className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                                <span className="hidden xs:inline">Mevcut</span> Görevi Gör
+                              </button>
+                            ) : currentUserId && (
+                              <button
+                                onClick={() => openAssignTaskModal(member)}
+                                className="flex-1 px-3 sm:px-4 py-2 sm:py-2.5 bg-indigo-50 text-indigo-600 rounded-lg sm:rounded-xl text-xs sm:text-sm font-semibold hover:bg-indigo-100 flex items-center justify-center gap-1.5 sm:gap-2 border border-indigo-200"
+                              >
+                                <ListChecks className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                                Görev Ata
+                              </button>
+                            )}
+                            {isActive && member.current_lat && member.current_lng && onFocusMember && (
+                              <button
+                                onClick={() => {
+                                  onFocusMember(member.id, member.username, member.current_lat!, member.current_lng!);
+                                  onClose();
+                                }}
+                                className="px-3 sm:px-4 py-2 sm:py-2.5 bg-cyan-50 text-cyan-600 rounded-lg sm:rounded-xl text-xs sm:text-sm font-semibold hover:bg-cyan-100 flex items-center justify-center gap-1.5 sm:gap-2 border border-cyan-200"
+                              >
+                                <Navigation className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                                <span className="hidden sm:inline">Haritada</span> Takip
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Route Start Time */}
+                          {member.route_started_at && (
+                            <div className="flex items-center justify-between text-xs sm:text-sm text-gray-500 bg-gray-50 rounded-lg sm:rounded-xl p-2 sm:p-3">
+                              <span className="flex items-center gap-1.5 sm:gap-2">
+                                <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                                <span className="hidden xs:inline">Rota</span> Başlangıcı
+                              </span>
+                              <span className="text-gray-800 font-medium">
+                                {formatTime(member.route_started_at)} • {formatLiveDuration(member.route_started_at)}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Completed Locations */}
+                          {completedLocations.length > 0 && (
+                            <div className="bg-gray-50 rounded-lg sm:rounded-xl overflow-hidden border border-gray-200">
+                              <div className="px-2.5 sm:px-3 py-1.5 sm:py-2 border-b border-gray-200 flex items-center justify-between">
+                                <span className="text-xs sm:text-sm font-medium text-gray-800 flex items-center gap-1.5 sm:gap-2">
+                                  <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600" />
+                                  Tamamlanan Yerler
+                                </span>
+                                <span className="text-[10px] sm:text-xs text-gray-500">{completedLocations.length} yer</span>
+                              </div>
+                              <div className="max-h-36 sm:max-h-48 overflow-y-auto p-1.5 sm:p-2 space-y-1.5 sm:space-y-2">
+                                {completedLocations.map((loc, idx) => (
+                                  <div key={idx} className="flex items-start gap-1.5 sm:gap-2 text-[10px] sm:text-xs bg-emerald-50 rounded-lg p-1.5 sm:p-2 border border-emerald-200">
+                                    <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600 shrink-0 mt-0.5" />
+                                    <div className="flex-1 min-w-0">
+                                      <div className="font-medium text-gray-800 truncate">{loc.name}</div>
+                                      <div className="text-gray-500 flex items-center gap-1.5 sm:gap-2 mt-0.5">
+                                        <span className="flex items-center gap-0.5 sm:gap-1">
+                                          <Car className="w-2.5 h-2.5 sm:w-3 sm:h-3" />{loc.travelDurationMinutes} dk
+                                        </span>
+                                        <span className="flex items-center gap-0.5 sm:gap-1">
+                                          <Briefcase className="w-2.5 h-2.5 sm:w-3 sm:h-3" />{loc.workDurationMinutes} dk
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Idle State */}
+                          {!isActive && member.total_route_count === 0 && (
+                            <div className="bg-gray-50 rounded-lg sm:rounded-xl p-4 sm:p-6 text-center">
+                              <Clock className="w-8 h-8 sm:w-10 sm:h-10 mx-auto mb-1.5 sm:mb-2 text-gray-400" />
+                              <div className="text-xs sm:text-sm text-gray-500">Aktif rota yok</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {idleMembers.map((member) => (
-                      <TeamMemberCard 
-                        key={member.id} 
-                        member={member} 
-                        onFocus={onFocusMember}
-                        currentTask={memberCurrentTask[member.user_id] ?? null}
-                        onAssignTask={currentUserId ? () => openAssignTaskModal(member) : undefined}
-                        onOpenTaskDetails={() => openTaskDetails(member)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* Assign Task Modal */}
+        {/* Footer */}
+        <footer className="shrink-0 px-3 sm:px-4 py-2 sm:py-3 bg-white border-t border-gray-200 safe-area-bottom">
+          <div className="flex items-center justify-between text-[10px] sm:text-xs text-gray-500">
+            <span className="flex items-center gap-1.5">
+              <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-600 rounded font-medium">{activeMembers.length} aktif</span>
+              <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded font-medium">{idleMembers.length} beklemede</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <RefreshCw className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+              <span className="hidden xs:inline">Her 30 saniyede</span> güncellenir
+            </span>
+          </div>
+        </footer>
+
+        {/* Task Assignment Modal */}
         {isAssignTaskModalOpen && taskMember && (
-          <div className="fixed inset-0 bg-black/50 flex items-start sm:items-center justify-center z-[1210] p-4 overflow-y-auto">
-            <div className="bg-white rounded-xl p-4 sm:p-6 w-full max-w-lg shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto">
-              <div className="flex items-start justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="text-lg font-bold">Görev Ata</h3>
-                  <p className="text-sm text-gray-600">Kişi: <span className="font-semibold">{taskMember.username}</span></p>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-end sm:items-center justify-center z-[100000] p-0 sm:p-4">
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl p-4 sm:p-6 w-full sm:max-w-lg shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-start justify-between gap-3 mb-3 sm:mb-4">
+                <div className="min-w-0">
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800">Görev Ata</h3>
+                  <p className="text-xs sm:text-sm text-gray-500">Kişi: <span className="text-gray-800 font-semibold truncate">{taskMember.username}</span></p>
                 </div>
-                <button
-                  onClick={closeAssignTaskModal}
-                  className="p-2 rounded-lg hover:bg-gray-100"
-                  title="Kapat"
-                >
-                  <X className="w-5 h-5 text-gray-600" />
+                <button onClick={closeAssignTaskModal} className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl hover:bg-gray-100 text-gray-500 hover:text-gray-700 shrink-0">
+                  <X className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
               </div>
 
-              {assignError ? (
-                <div className="mb-3 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-2">
+              {assignError && (
+                <div className="mb-3 sm:mb-4 text-xs sm:text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg sm:rounded-xl p-2.5 sm:p-3">
                   {assignError}
                 </div>
-              ) : null}
+              )}
 
-              <div className="space-y-4">
+              <div className="space-y-3 sm:space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Bölge</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1.5 sm:mb-2">Bölge</label>
                   <select
                     value={taskRegionId}
                     onChange={(e) => {
@@ -623,124 +700,98 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
                       setTaskRegionId(id);
                       const name = regions.find(r => r.id === id)?.name ?? '';
                       if (name) setTaskTitle(`${name} Görevi`);
-                      setTaskSearch('');
                       const locs = regions.find(r => r.id === id)?.locations ?? [];
                       setSelectedTaskLocationIds(locs.map(l => String(l.id)));
                     }}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-gray-800 text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50"
                   >
                     <option value={0}>Bölge seçiniz</option>
                     {regions.map(r => (
                       <option key={r.id} value={r.id}>{r.id}. Bölge - {r.name}</option>
                     ))}
                   </select>
-                  {taskRegionId !== 0 ? (
-                    <div className="mt-1 text-xs text-gray-500">
-                      Lokasyon sayısı: {(regions.find(r => r.id === taskRegionId)?.locations?.length ?? 0)}
-                    </div>
-                  ) : null}
+                </div>
+
+                <div>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1.5 sm:mb-2">Görev Başlığı</label>
+                  <input
+                    value={taskTitle}
+                    onChange={e => setTaskTitle(e.target.value)}
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-gray-800 text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1.5 sm:mb-2">Açıklama (opsiyonel)</label>
+                  <textarea
+                    value={taskDescription}
+                    onChange={e => setTaskDescription(e.target.value)}
+                    rows={2}
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-gray-800 text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 resize-none"
+                  />
                 </div>
 
                 {taskRegionId !== 0 && (
                   <div>
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <label className="block text-sm font-medium text-gray-700">Lokasyonlar</label>
+                    <div className="flex items-center justify-between mb-1.5 sm:mb-2">
+                      <label className="text-xs sm:text-sm font-medium text-gray-700">
+                        Lokasyonlar ({selectedTaskLocationIds.length}/{selectedRegionLocations.length})
+                      </label>
                       <button
                         type="button"
                         onClick={() => {
-                          if (!selectedRegionLocations.length) return;
-                          if (isAllSelectedInRegion) setSelectedTaskLocationIds([]);
-                          else setSelectedTaskLocationIds(selectedRegionLocations.map(l => String(l.id)));
+                          if (selectedTaskLocationIds.length === selectedRegionLocations.length) {
+                            setSelectedTaskLocationIds([]);
+                          } else {
+                            setSelectedTaskLocationIds(selectedRegionLocations.map(l => String(l.id)));
+                          }
                         }}
-                        className="text-sm px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700"
+                        className="text-[10px] sm:text-xs px-2 sm:px-3 py-1 sm:py-1.5 rounded-md sm:rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700"
                       >
-                        {isAllSelectedInRegion ? 'Tümünü Kaldır' : 'Tümünü Seç'}
+                        {selectedTaskLocationIds.length === selectedRegionLocations.length ? 'Hiçbirini Seçme' : 'Tümünü Seç'}
                       </button>
                     </div>
-
-                    <input
-                      type="text"
-                      value={taskSearch}
-                      onChange={(e) => setTaskSearch(e.target.value)}
-                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 mb-2"
-                      placeholder="Ara (isim/merkez/id)"
-                    />
-
-                    <div className="border border-gray-200 rounded-lg max-h-56 overflow-auto">
-                      {filteredRegionLocations.length === 0 ? (
-                        <div className="p-3 text-sm text-gray-500">Lokasyon bulunamadı</div>
-                      ) : (
-                        <div className="divide-y divide-gray-100">
-                          {filteredRegionLocations.map((loc) => {
-                            const id = String(loc.id);
-                            const checked = selectedTaskLocationIds.includes(id);
-                            return (
-                              <label key={id} className="flex items-start gap-3 p-3 hover:bg-gray-50 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(e) => {
-                                    const next = e.target.checked;
-                                    setSelectedTaskLocationIds((prev) => {
-                                      const set = new Set(prev);
-                                      if (next) set.add(id);
-                                      else set.delete(id);
-                                      return Array.from(set);
-                                    });
-                                  }}
-                                  className="mt-1"
-                                />
-                                <div className="min-w-0">
-                                  <div className="text-sm font-medium text-gray-900 truncate">{loc.name}</div>
-                                  <div className="text-xs text-gray-500 truncate">{loc.center}</div>
-                                </div>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      )}
+                    <div className="max-h-32 sm:max-h-40 overflow-y-auto bg-gray-50 rounded-lg sm:rounded-xl border border-gray-200 p-1.5 sm:p-2 space-y-1">
+                      {selectedRegionLocations.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'tr')).map(loc => {
+                        const isSelected = selectedTaskLocationIds.includes(String(loc.id));
+                        return (
+                          <label key={loc.id} className={`flex items-center gap-1.5 sm:gap-2 p-1.5 sm:p-2 rounded-md sm:rounded-lg cursor-pointer ${isSelected ? 'bg-cyan-50' : 'hover:bg-gray-100'}`}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {
+                                if (isSelected) {
+                                  setSelectedTaskLocationIds(prev => prev.filter(id => id !== String(loc.id)));
+                                } else {
+                                  setSelectedTaskLocationIds(prev => [...prev, String(loc.id)]);
+                                }
+                              }}
+                              className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded bg-gray-50 border-gray-300 text-cyan-500 focus:ring-cyan-500/50"
+                            />
+                            <span className={`text-xs sm:text-sm truncate ${isSelected ? 'text-gray-800' : 'text-gray-700'}`}>{loc.name}</span>
+                          </label>
+                        );
+                      })}
                     </div>
-
-                    <div className="mt-2 text-xs text-gray-500">Seçili: {selectedTaskLocationIds.length}</div>
                   </div>
                 )}
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Başlık</label>
-                  <input
-                    type="text"
-                    value={taskTitle}
-                    onChange={(e) => setTaskTitle(e.target.value)}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    placeholder="Görev başlığı"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Açıklama (opsiyonel)</label>
-                  <textarea
-                    value={taskDescription}
-                    onChange={(e) => setTaskDescription(e.target.value)}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[90px]"
-                    placeholder="Not / açıklama"
-                  />
-                </div>
-              </div>
-
-              <div className="mt-6 flex gap-2 justify-end">
-                <button
-                  onClick={closeAssignTaskModal}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
-                  disabled={assigningTask}
-                >
-                  Vazgeç
-                </button>
                 <button
                   onClick={handleAssignTask}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60"
-                  disabled={assigningTask}
+                  disabled={assigningTask || taskRegionId === 0 || selectedTaskLocationIds.length === 0}
+                  className="w-full py-2.5 sm:py-3 rounded-lg sm:rounded-xl bg-cyan-600 text-white font-semibold shadow-sm hover:bg-cyan-700 disabled:opacity-50 transition-all flex items-center justify-center gap-1.5 sm:gap-2 text-sm"
                 >
-                  {assigningTask ? 'Atanıyor…' : 'Görev Ata'}
+                  {assigningTask ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                      Atanıyor...
+                    </>
+                  ) : (
+                    <>
+                      <UserCheck className="w-4 h-4 sm:w-5 sm:h-5" />
+                      Görevi Ata
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -749,288 +800,48 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
 
         {/* Task Details Modal */}
         {isTaskDetailsOpen && taskDetailsMember && taskDetailsTask && (
-          <div className="fixed inset-0 bg-black/50 flex items-start sm:items-center justify-center z-[1210] p-4 overflow-y-auto">
-            <div className="bg-white rounded-xl p-4 sm:p-6 w-full max-w-lg shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto">
-              <div className="flex items-start justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="text-lg font-bold">Mevcut Görev</h3>
-                  <p className="text-sm text-gray-600">Kişi: <span className="font-semibold">{taskDetailsMember.username}</span></p>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-end sm:items-center justify-center z-[100000] p-0 sm:p-4">
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl p-4 sm:p-6 w-full sm:max-w-lg shadow-2xl border border-gray-200">
+              <div className="flex items-start justify-between gap-3 mb-3 sm:mb-4">
+                <div className="min-w-0">
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800 truncate">{taskDetailsTask.title}</h3>
+                  <p className="text-xs sm:text-sm text-gray-500">{taskDetailsMember.username}</p>
                 </div>
-                <button
-                  onClick={closeTaskDetails}
-                  className="p-2 rounded-lg hover:bg-gray-100"
-                  title="Kapat"
-                >
-                  <X className="w-5 h-5 text-gray-600" />
+                <button onClick={closeTaskDetails} className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl hover:bg-gray-100 text-gray-500 hover:text-gray-700 shrink-0">
+                  <X className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
               </div>
 
-              <div className="space-y-3">
-                <div>
-                  <div className="text-sm text-gray-500">Başlık</div>
-                  <div className="font-semibold text-gray-900">{taskDetailsTask.title}</div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <div className="text-xs text-gray-500">Durum</div>
-                    <div className="text-sm font-semibold text-gray-900">{taskDetailsTask.status === 'in_progress' ? 'Devam Ediyor' : 'Atandı'}</div>
+              <div className="space-y-2.5 sm:space-y-3">
+                {taskDetailsTask.description && (
+                  <p className="text-xs sm:text-sm text-gray-700 bg-gray-50 rounded-lg sm:rounded-xl p-2.5 sm:p-3">{taskDetailsTask.description}</p>
+                )}
+                
+                <div className="grid grid-cols-2 gap-2 sm:gap-3 text-xs sm:text-sm">
+                  <div className="bg-gray-50 rounded-lg sm:rounded-xl p-2.5 sm:p-3">
+                    <div className="text-gray-500 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Bölge</div>
+                    <div className="text-gray-800 font-medium truncate">{taskDetailsTask.regionName || '-'}</div>
                   </div>
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <div className="text-xs text-gray-500">Lokasyon</div>
-                    <div className="text-sm font-semibold text-gray-900">{Array.isArray(taskDetailsTask.routeLocationIds) ? taskDetailsTask.routeLocationIds.length : 0}</div>
+                  <div className="bg-gray-50 rounded-lg sm:rounded-xl p-2.5 sm:p-3">
+                    <div className="text-gray-500 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Lokasyon</div>
+                    <div className="text-gray-800 font-medium">{taskDetailsTask.routeLocationIds?.length || 0} yer</div>
                   </div>
-                </div>
-                {taskDetailsTask.regionName ? (
-                  <div>
-                    <div className="text-sm text-gray-500">Bölge</div>
-                    <div className="text-sm font-semibold text-gray-900">{taskDetailsTask.regionName}</div>
-                  </div>
-                ) : null}
-                {taskDetailsTask.description ? (
-                  <div>
-                    <div className="text-sm text-gray-500">Açıklama</div>
-                    <div className="text-sm text-gray-800 whitespace-pre-line">{taskDetailsTask.description}</div>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="mt-6 flex justify-end">
-                <button
-                  onClick={closeTaskDetails}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
-                >
-                  Kapat
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-interface TeamMemberCardProps {
-  member: TeamMemberStatus;
-  onFocus?: (memberId: string, username: string, lat: number, lng: number) => void;
-  currentTask?: Task | null;
-  onAssignTask?: () => void;
-  onOpenTaskDetails?: () => void;
-}
-
-const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ member, onFocus, currentTask, onAssignTask, onOpenTaskDetails }) => {
-  const [showCompletedList, setShowCompletedList] = useState(false);
-  const statusInfo = statusLabels[member.status] || statusLabels.idle;
-  const isActive = member.status !== 'idle';
-  const completedLocations = member.completed_locations || [];
-
-  const todayCompleted = member.today_completed_count || 0;
-  
-  const handleFocusClick = () => {
-    if (onFocus && member.current_lat && member.current_lng) {
-      onFocus(member.user_id, member.username, member.current_lat, member.current_lng);
-    }
-  };
-
-  // Calculate current duration (if working or traveling)
-  const getCurrentDuration = () => {
-    if (member.status === 'adreste' && member.work_start_time) {
-      return formatLiveDuration(member.work_start_time);
-    }
-    if (member.status === 'yolda' && member.current_leg_start_time) {
-      return formatLiveDuration(member.current_leg_start_time);
-    }
-    return null;
-  };
-
-  const currentDuration = getCurrentDuration();
-
-  return (
-    <div className={`bg-white border-2 rounded-xl overflow-hidden transition-all hover:shadow-lg ${
-      isActive ? 'border-gray-200 shadow-md' : 'border-gray-100 shadow-sm'
-    }`}>
-      {/* Header Row */}
-      <div className="p-4 pb-3">
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <div className={`relative w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg ${
-              isActive ? 'bg-gray-900' : 'bg-gray-500'
-            }`}>
-              {member.username.charAt(0).toUpperCase()}
-              {/* Status dot with pulse animation for active */}
-              <span className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full border-2 border-white ${statusInfo.dotColor} ${isActive ? 'animate-pulse' : ''}`}></span>
-            </div>
-            <div>
-              <div className="font-semibold text-gray-900 text-base">{member.username}</div>
-              <div className="text-xs text-gray-400">{formatTimeAgo(member.last_updated_at)}</div>
-            </div>
-          </div>
-          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ${statusInfo.bgColor} ${statusInfo.color}`}>
-            {statusInfo.icon}
-            <span className="text-xs font-semibold">{statusInfo.label}</span>
-          </div>
-        </div>
-
-        {/* Today's Summary */}
-        <div className="grid grid-cols-1 gap-2 mb-3">
-          <div className="text-center bg-green-50 rounded-lg py-2">
-            <div className="text-lg font-bold text-green-600">{todayCompleted}</div>
-            <div className="text-[10px] text-green-700 font-medium">Tamamlanan</div>
-          </div>
-        </div>
-
-        {/* Current Activity with Live Duration */}
-        {member.status === 'yolda' && member.current_location_name && (
-          <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-3">
-            <div className="flex items-center gap-2 text-blue-700 mb-1">
-              <Car className="w-4 h-4" />
-              <span className="text-xs font-semibold uppercase">Yolda</span>
-              {currentDuration && (
-                <span className="ml-auto text-xs bg-blue-100 px-2 py-0.5 rounded-full font-bold">
-                  <Timer className="w-3 h-3 inline mr-1" />{currentDuration}
-                </span>
-              )}
-            </div>
-            <div className="text-sm font-semibold text-gray-800">{member.current_location_name}</div>
-            {member.next_location_name && (
-              <div className="flex items-center gap-1 mt-1 text-xs text-gray-500">
-                <ChevronRight className="w-3 h-3" />
-                Sonra: {member.next_location_name}
-              </div>
-            )}
-          </div>
-        )}
-
-        {member.status === 'adreste' && member.current_location_name && (
-          <div className="bg-orange-50 border border-orange-100 rounded-lg p-3 mb-3">
-            <div className="flex items-center gap-2 text-orange-700 mb-1">
-              <Briefcase className="w-4 h-4" />
-              <span className="text-xs font-semibold uppercase">Çalışıyor</span>
-              {currentDuration && (
-                <span className="ml-auto text-xs bg-orange-100 px-2 py-0.5 rounded-full font-bold animate-pulse">
-                  <Timer className="w-3 h-3 inline mr-1" />{currentDuration}
-                </span>
-              )}
-            </div>
-            <div className="text-sm font-semibold text-gray-800">{member.current_location_name}</div>
-            {member.next_location_name && (
-              <div className="flex items-center gap-1 mt-1 text-xs text-gray-500">
-                <ChevronRight className="w-3 h-3" />
-                Sonra: {member.next_location_name}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Progress Bar for Active Route */}
-        {member.total_route_count > 0 && (
-          <div className="mb-3">
-            <div className="flex items-center justify-between text-xs mb-1">
-              <span className="text-gray-500">Rota İlerlemesi</span>
-              <span className="font-bold text-gray-700">
-                {member.completed_count} / {member.total_route_count}
-              </span>
-            </div>
-            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-gradient-to-r from-green-400 to-green-500 rounded-full transition-all duration-500"
-                style={{ width: `${(member.completed_count / member.total_route_count) * 100}%` }}
-              />
-            </div>
-            {member.route_started_at && (
-              <div className="text-xs text-gray-500 mt-1 text-right">
-                Başlangıç: {formatTime(member.route_started_at)} • Geçen: {formatLiveDuration(member.route_started_at)}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Idle State */}
-        {member.status === 'idle' && member.total_route_count === 0 && (
-          <div className="bg-gray-50 rounded-lg p-4 text-center">
-            <Clock className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-            <div className="text-sm text-gray-500">Aktif rota yok</div>
-            {todayCompleted > 0 && (
-              <div className="text-xs text-green-600 mt-1">
-                Seçili ay {todayCompleted} yer tamamladı
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {currentTask && onOpenTaskDetails ? (
-        <button
-          onClick={onOpenTaskDetails}
-          className="w-full mb-1 px-3 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-sm font-semibold hover:bg-emerald-100 flex items-center justify-center gap-2"
-        >
-          <ListChecks className="w-4 h-4" />
-          Mevcut Görev
-        </button>
-      ) : onAssignTask ? (
-        <button
-          onClick={onAssignTask}
-          className="w-full mb-1 px-3 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-semibold hover:bg-indigo-100 flex items-center justify-center gap-2"
-        >
-          <ListChecks className="w-4 h-4" />
-          Görev Ata
-        </button>
-      ) : null}
-
-      {/* Completed Locations Accordion */}
-      {completedLocations.length > 0 && (
-        <div className="border-t border-gray-100">
-          <button
-            onClick={() => setShowCompletedList(!showCompletedList)}
-            className="w-full px-4 py-2 flex items-center justify-between text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-          >
-            <span className="flex items-center gap-2">
-              <ListChecks className="w-4 h-4 text-green-500" />
-              <span>Tamamlanan Yerler ({completedLocations.length})</span>
-            </span>
-            {showCompletedList ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </button>
-          
-          {showCompletedList && (
-            <div className="px-4 pb-3 max-h-48 overflow-y-auto">
-              <div className="space-y-2">
-                {completedLocations.map((loc, idx) => (
-                  <div key={idx} className="flex items-start gap-2 text-xs bg-green-50 rounded-lg p-2">
-                    <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-gray-800 truncate">{loc.name}</div>
-                      <div className="text-gray-500 flex items-center gap-2 mt-0.5">
-                        <span className="flex items-center gap-1">
-                          <Car className="w-3 h-3" />{loc.travelDurationMinutes} dk yol
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Briefcase className="w-3 h-3" />{loc.workDurationMinutes} dk çalışma
-                        </span>
-                      </div>
-                      <div className="text-gray-400 mt-0.5">
-                        {formatTime(loc.arrivedAt)} - {formatTime(loc.completedAt)}
-                      </div>
+                  <div className="bg-gray-50 rounded-lg sm:rounded-xl p-2.5 sm:p-3">
+                    <div className="text-gray-500 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Durum</div>
+                    <div className={`font-medium ${taskDetailsTask.status === 'in_progress' ? 'text-blue-600' : taskDetailsTask.status === 'completed' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                      {taskDetailsTask.status === 'in_progress' ? 'Devam Ediyor' : taskDetailsTask.status === 'completed' ? 'Tamamlandı' : 'Atandı'}
                     </div>
                   </div>
-                ))}
+                  <div className="bg-gray-50 rounded-lg sm:rounded-xl p-2.5 sm:p-3">
+                    <div className="text-gray-500 text-[10px] sm:text-xs mb-0.5 sm:mb-1">Atayan</div>
+                    <div className="text-gray-800 font-medium truncate">{taskDetailsTask.createdByUsername || '-'}</div>
+                  </div>
+                </div>
               </div>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Focus Button */}
-      {(member.status === 'yolda' || member.status === 'adreste') && member.current_lat && member.current_lng && onFocus && (
-        <div className="px-4 pb-4">
-          <button
-            onClick={handleFocusClick}
-            className="w-full py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors flex items-center justify-center gap-2 border border-indigo-200"
-          >
-            <Navigation className="w-4 h-4" />
-            Haritada takip et
-          </button>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

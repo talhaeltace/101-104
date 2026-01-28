@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
 import { Search, MapPin, Cpu, ChevronDown, ChevronUp, DoorClosed, Filter } from 'lucide-react';
 import { Location, Region } from '../data/regions';
 import { fieldsMatchQuery } from '../lib/search';
@@ -103,10 +103,15 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     }
   }, [isExpanded]);
 
-  const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
-  const isDirectorateLocation = (loc: Location) =>
-    normalizeDirectorateField((loc as any).brand) === 'BÖLGE' &&
-    normalizeDirectorateField((loc as any).model) === 'MÜDÜRLÜK';
+  const normalizeDirectorateField = useCallback((value: unknown) => String(value ?? '').trim().toUpperCase(), []);
+
+  const isDirectorateLocation = useCallback((loc: Location) => {
+    const maybe = loc as unknown as { brand?: unknown; model?: unknown };
+    return (
+      normalizeDirectorateField(maybe.brand) === 'BÖLGE' &&
+      normalizeDirectorateField(maybe.model) === 'MÜDÜRLÜK'
+    );
+  }, [normalizeDirectorateField]);
 
 
   // If an external searchTerm is provided (header search), auto-expand the selector
@@ -138,18 +143,18 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     return { label: 'Hiç Girilmedi', colorClass: 'text-amber-900', dotClass: 'bg-amber-800' };
   };
 
-  const getPlannedRtuCount = (loc: Location) => {
+  const getPlannedRtuCount = useCallback((loc: Location) => {
     const eq = loc.details?.equipment;
     const rtuCount = eq?.rtuCount ?? 0;
     if (rtuCount > 0) return rtuCount;
     const teias = eq?.teiasRtuInstallation ?? 0;
     if (teias > 0) return teias;
     return loc.details?.hasRTU ? 1 : 0;
-  };
+  }, []);
 
-  const isRtuLocation = (loc: Location) => getPlannedRtuCount(loc) > 0 || !!loc.details?.hasRTU;
+  const isRtuLocation = useCallback((loc: Location) => getPlannedRtuCount(loc) > 0 || !!loc.details?.hasRTU, [getPlannedRtuCount]);
 
-  const matchesOneStatus = (filterKey: StatusFilterKey, location: Location) => {
+  const matchesOneStatus = useCallback((filterKey: StatusFilterKey, location: Location) => {
     // Directorate locations are navigation/map items; they should not affect operational filters.
     // Allow 'notes' so they can still be found when needed.
     if (isDirectorateLocation(location)) {
@@ -192,7 +197,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
       default:
         return true;
     }
-  };
+  }, [getPlannedRtuCount, isDirectorateLocation, isRtuLocation]);
 
   const matchesStatus = (location: Location) => {
     if (!effectiveStatusFilters || effectiveStatusFilters.length === 0) return true; // Tümü
@@ -226,7 +231,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
 
     counts.__total = base.filter(loc => fieldsMatchQuery(q, loc.name, loc.center, loc.id)).length;
     return counts;
-  }, [locations, regions, selectedRegion, q]);
+  }, [locations, regions, selectedRegion, q, isDirectorateLocation, matchesOneStatus]);
 
   const totalBaseCount = statusCounts.__total ?? 0;
 

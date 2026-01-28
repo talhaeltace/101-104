@@ -67,14 +67,16 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
   }, 0);
   const selectedRtuTotal = selectedRtuInstalled + selectedRtuTodo;
 
+  // Kurumsal renk paleti - sadece mavi ve gri tonları
   const stats = [
     {
       label: 'Toplam Lokasyon',
       value: metricLocations.length,
       selectedValue: metricSelectedRegionLocations.length,
       icon: MapPin,
-      color: 'bg-blue-500',
-      textColor: 'text-blue-600',
+      barColor: 'bg-blue-500',
+      iconBg: 'bg-blue-50',
+      iconColor: 'text-blue-600',
       showPercentage: false
     },
     {
@@ -82,8 +84,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: acceptedCount,
       selectedValue: selectedAcceptedCount,
       icon: CheckCircle2,
-      color: 'bg-emerald-500',
-      textColor: 'text-emerald-600',
+      barColor: 'bg-blue-500',
+      iconBg: 'bg-green-50',
+      iconColor: 'text-green-600',
       showPercentage: true
     },
     {
@@ -91,8 +94,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: installedCount,
       selectedValue: selectedInstalledCount,
       icon: Zap,
-      color: 'bg-indigo-500',
-      textColor: 'text-indigo-600',
+      barColor: 'bg-blue-500',
+      iconBg: 'bg-blue-50',
+      iconColor: 'text-blue-600',
       showPercentage: true
     },
     {
@@ -100,8 +104,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: activeCount,
       selectedValue: selectedActiveCount,
       icon: Database,
-      color: 'bg-green-500',
-      textColor: 'text-green-600',
+      barColor: 'bg-blue-500',
+      iconBg: 'bg-green-50',
+      iconColor: 'text-green-600',
       showPercentage: true
     },
     {
@@ -109,8 +114,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: configuredCount,
       selectedValue: selectedConfiguredCount,
       icon: Activity,
-      color: 'bg-amber-500',
-      textColor: 'text-amber-600',
+      barColor: 'bg-amber-500',
+      iconBg: 'bg-amber-50',
+      iconColor: 'text-amber-600',
       showPercentage: true
     },
     {
@@ -118,8 +124,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: cardAccessCount,
       selectedValue: selectedCardAccessCount,
       icon: CreditCard,
-      color: 'bg-purple-500',
-      textColor: 'text-purple-600',
+      barColor: 'bg-blue-500',
+      iconBg: 'bg-blue-50',
+      iconColor: 'text-blue-600',
       showPercentage: true
     },
     {
@@ -127,8 +134,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: sumKg(metricLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess),
       selectedValue: sumKg(metricSelectedRegionLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isInstalledCardAccess),
       icon: CreditCard,
-      color: 'bg-teal-500',
-      textColor: 'text-teal-600',
+      barColor: 'bg-blue-500',
+      iconBg: 'bg-blue-50',
+      iconColor: 'text-blue-600',
       showPercentage: true
     },
     {
@@ -136,8 +144,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: sumKg(metricLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess),
       selectedValue: sumKg(metricSelectedRegionLocations, loc => !!loc.details.hasCardAccess && !!loc.details.isActiveCardAccess),
       icon: TrendingUp,
-      color: 'bg-cyan-500',
-      textColor: 'text-cyan-600',
+      barColor: 'bg-blue-500',
+      iconBg: 'bg-green-50',
+      iconColor: 'text-green-600',
       showPercentage: true
     },
     {
@@ -145,8 +154,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: rtuTotal,
       selectedValue: selectedRtuTotal,
       icon: Activity,
-      color: 'bg-slate-500',
-      textColor: 'text-slate-600',
+      barColor: 'bg-gray-400',
+      iconBg: 'bg-gray-100',
+      iconColor: 'text-gray-600',
       showPercentage: true
     },
     {
@@ -154,8 +164,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: rtuInstalled,
       selectedValue: selectedRtuInstalled,
       icon: CheckCircle2,
-      color: 'bg-slate-600',
-      textColor: 'text-slate-700',
+      barColor: 'bg-gray-400',
+      iconBg: 'bg-gray-100',
+      iconColor: 'text-gray-600',
       showPercentage: true
     },
     {
@@ -163,8 +174,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: rtuTodo,
       selectedValue: selectedRtuTodo,
       icon: Zap,
-      color: 'bg-slate-400',
-      textColor: 'text-slate-600',
+      barColor: 'bg-amber-400',
+      iconBg: 'bg-amber-50',
+      iconColor: 'text-amber-600',
       showPercentage: true
     },
     {
@@ -172,8 +184,9 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
       value: metricLocations.length - activeCount,
       selectedValue: metricSelectedRegionLocations.length - selectedActiveCount,
       icon: Zap,
-      color: 'bg-orange-500',
-      textColor: 'text-orange-600',
+      barColor: 'bg-amber-500',
+      iconBg: 'bg-amber-50',
+      iconColor: 'text-amber-600',
       showPercentage: true
     }
   ];
@@ -192,16 +205,16 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
         return (
           <div 
             key={index} 
-            className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow"
+            className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm hover:shadow-md transition-shadow duration-200"
           >
             {/* Üst kısım - İkon ve Seçili Bölge */}
             <div className="flex items-start justify-between mb-4">
-              <div className={`w-10 h-10 rounded-lg ${stat.color} flex items-center justify-center`}>
-                <stat.icon className="w-5 h-5 text-white" strokeWidth={2} />
+              <div className={`w-10 h-10 rounded-lg ${stat.iconBg} flex items-center justify-center`}>
+                <stat.icon className={`w-5 h-5 ${stat.iconColor}`} strokeWidth={1.5} />
               </div>
               
               <div className="text-right">
-                <div className={`text-xl font-bold ${stat.textColor}`}>
+                <div className="text-xl font-semibold text-gray-700">
                   {stat.selectedValue}
                 </div>
                 <div className="text-xs text-gray-400">Seçili Bölge</div>
@@ -210,14 +223,14 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
             
             {/* Ana değer */}
             <div className="mb-3">
-              <div className="text-4xl font-bold text-gray-900">
+              <div className="text-3xl font-bold text-gray-800">
                 {stat.value}
               </div>
               <div className="text-xs text-gray-400 mt-0.5">Toplam</div>
             </div>
             
             {/* Etiket */}
-            <div className="text-sm font-medium text-gray-700 mb-3">
+            <div className="text-sm font-medium text-gray-600 mb-3">
               {stat.label}
             </div>
             
@@ -226,12 +239,12 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
               <div className="space-y-2">
                 <div>
                   <div className="flex justify-between text-xs mb-1">
-                    <span className="text-gray-500">Toplam</span>
-                    <span className="font-medium text-gray-700">%{totalPercentage}</span>
+                    <span className="text-gray-400">Toplam</span>
+                    <span className="font-medium text-gray-600">%{totalPercentage}</span>
                   </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                     <div 
-                      className={`h-full ${stat.color} rounded-full transition-all duration-500`}
+                      className={`h-full ${stat.barColor} rounded-full transition-all duration-500`}
                       style={{ width: `${totalPercentage}%` }}
                     />
                   </div>
@@ -240,12 +253,12 @@ const LocationStats: React.FC<LocationStatsProps> = ({ locations, selectedRegion
                 {/* Yüzde Bar - Seçili Bölge */}
                 <div>
                   <div className="flex justify-between text-xs mb-1">
-                    <span className="text-gray-500">Seçili Bölge</span>
-                    <span className={`font-medium ${stat.textColor}`}>%{selectedPercentage}</span>
+                    <span className="text-gray-400">Seçili Bölge</span>
+                    <span className="font-medium text-blue-600">%{selectedPercentage}</span>
                   </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                     <div 
-                      className={`h-full ${stat.color} opacity-60 rounded-full transition-all duration-500`}
+                      className={`h-full ${stat.barColor} opacity-60 rounded-full transition-all duration-500`}
                       style={{ width: `${selectedPercentage}%` }}
                     />
                   </div>

@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { apiFetch } from './apiClient';
 
 export interface ActivityLog {
   id?: string;
@@ -9,15 +9,15 @@ export interface ActivityLog {
   arrival_time?: string;
   completion_time?: string;
   duration_minutes?: number;
-  activity_type: 'arrival' | 'completion' | 'general';
+  activity_type: 'arrival' | 'completion' | 'general' | 'login' | 'logout' | 'update' | 'create' | 'delete' | 'location';
   created_at?: string;
 }
 
 export const logActivity = async (activity: ActivityLog) => {
   try {
-    const { data, error } = await supabase
-      .from('activities')
-      .insert([{
+    const res = await apiFetch('/activities', {
+      method: 'POST',
+      body: JSON.stringify({
         username: activity.username,
         action: activity.action,
         location_id: activity.location_id || null,
@@ -25,17 +25,11 @@ export const logActivity = async (activity: ActivityLog) => {
         arrival_time: activity.arrival_time || null,
         completion_time: activity.completion_time || null,
         duration_minutes: activity.duration_minutes || null,
-        activity_type: activity.activity_type
-      }])
-      .select()
-      .single();
+        activity_type: activity.activity_type,
+      }),
+    });
 
-    if (error) {
-      console.error('Error logging activity:', error);
-      return null;
-    }
-
-    return data;
+    return (res as any)?.data ?? null;
   } catch (err) {
     console.error('Unexpected error logging activity:', err);
     return null;
@@ -84,18 +78,8 @@ export const logCompletion = async (
 
 export const getActivities = async (limit = 200) => {
   try {
-    const { data, error } = await supabase
-      .from('activities')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (error) {
-      console.error('Error fetching activities:', error);
-      return [];
-    }
-
-    return data || [];
+    const res = await apiFetch(`/activities?limit=${encodeURIComponent(String(limit))}`);
+    return ((res as any)?.data ?? []) as any[];
   } catch (err) {
     console.error('Unexpected error fetching activities:', err);
     return [];
@@ -104,19 +88,12 @@ export const getActivities = async (limit = 200) => {
 
 export const getActivitiesByLocation = async (locationId: string, limit = 50) => {
   try {
-    const { data, error } = await supabase
-      .from('activities')
-      .select('*')
-      .eq('location_id', locationId)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (error) {
-      console.error('Error fetching location activities:', error);
-      return [];
-    }
-
-    return data || [];
+    const qs = new URLSearchParams({
+      location_id: String(locationId),
+      limit: String(limit),
+    });
+    const res = await apiFetch(`/activities?${qs.toString()}`);
+    return ((res as any)?.data ?? []) as any[];
   } catch (err) {
     console.error('Unexpected error fetching location activities:', err);
     return [];

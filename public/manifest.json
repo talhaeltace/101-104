@@ -1,10 +1,11 @@
 {
-  "name": "MapFlow",
-  "short_name": "MapFlow",
+  "name": "Cartiva",
+  "short_name": "Cartiva",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "description": "Route builder + locations app",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "description": "Saha operasyon yönetim uygulaması",
   "icons": [
     {
       "src": "/pwa-192.png",

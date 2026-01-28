@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { apiFetch } from './apiClient';
 
 export type AcceptanceRequestStatus = 'pending' | 'approved' | 'rejected';
 
@@ -30,19 +30,9 @@ const mapRow = (row: any): AcceptanceRequest => ({
 
 export const listPendingAcceptanceRequests = async (): Promise<AcceptanceRequest[]> => {
   try {
-    const { data, error } = await supabase
-      .from('location_acceptance_requests')
-      .select('*')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false })
-      .limit(200);
-
-    if (error) {
-      console.warn('listPendingAcceptanceRequests error', error);
-      return [];
-    }
-
-    return (data || []).map(mapRow);
+    const res = await apiFetch('/acceptance-requests/pending');
+    const rows = ((res as any)?.data ?? []) as any[];
+    return rows.map(mapRow);
   } catch (e) {
     console.warn('listPendingAcceptanceRequests exception', e);
     return [];
@@ -58,32 +48,20 @@ export const createAcceptanceRequest = async (params: {
   const locationId = String(params.locationId);
 
   try {
-    // Avoid duplicate pending requests for the same location
-    const { data: existing, error: existingError } = await supabase
-      .from('location_acceptance_requests')
-      .select('id')
-      .eq('location_id', locationId)
-      .eq('status', 'pending')
-      .limit(1);
-
-    if (!existingError && existing && existing.length > 0) {
-      return { success: true, alreadyPending: true };
-    }
-
-    const { error } = await supabase.from('location_acceptance_requests').insert({
-      location_id: locationId,
-      location_name: params.locationName,
-      requested_by_user_id: params.requestedByUserId,
-      requested_by_username: params.requestedByUsername,
-      status: 'pending'
+    const res = await apiFetch('/acceptance-requests', {
+      method: 'POST',
+      body: JSON.stringify({
+        locationId,
+        locationName: params.locationName,
+        requestedByUserId: params.requestedByUserId,
+        requestedByUsername: params.requestedByUsername,
+      }),
     });
 
-    if (error) {
-      console.warn('createAcceptanceRequest error', error);
-      return { success: false };
-    }
-
-    return { success: true };
+    return {
+      success: (res as any)?.success === true,
+      alreadyPending: (res as any)?.alreadyPending === true,
+    };
   } catch (e) {
     console.warn('createAcceptanceRequest exception', e);
     return { success: false };
@@ -96,25 +74,10 @@ export const approveAcceptanceRequest = async (params: {
   adminUsername?: string;
 }): Promise<boolean> => {
   try {
-    const now = new Date().toISOString();
-
-    // Mark request approved
-    const { error: requestError } = await supabase
-      .from('location_acceptance_requests')
-      .update({
-        status: 'approved',
-        reviewed_at: now,
-        reviewed_by_user_id: params.adminUserId,
-        reviewed_by_username: params.adminUsername ?? null
-      })
-      .eq('id', params.requestId);
-
-    if (requestError) {
-      console.warn('approveAcceptanceRequest request update error', requestError);
-      return false;
-    }
-
-    return true;
+    const res = await apiFetch(`/acceptance-requests/${encodeURIComponent(String(params.requestId))}/approve`, {
+      method: 'POST',
+    });
+    return (res as any)?.success === true;
   } catch (e) {
     console.warn('approveAcceptanceRequest exception', e);
     return false;
@@ -127,24 +90,10 @@ export const rejectAcceptanceRequest = async (params: {
   adminUsername?: string;
 }): Promise<boolean> => {
   try {
-    const now = new Date().toISOString();
-
-    const { error } = await supabase
-      .from('location_acceptance_requests')
-      .update({
-        status: 'rejected',
-        reviewed_at: now,
-        reviewed_by_user_id: params.adminUserId,
-        reviewed_by_username: params.adminUsername ?? null
-      })
-      .eq('id', params.requestId);
-
-    if (error) {
-      console.warn('rejectAcceptanceRequest error', error);
-      return false;
-    }
-
-    return true;
+    const res = await apiFetch(`/acceptance-requests/${encodeURIComponent(String(params.requestId))}/reject`, {
+      method: 'POST',
+    });
+    return (res as any)?.success === true;
   } catch (e) {
     console.warn('rejectAcceptanceRequest exception', e);
     return false;

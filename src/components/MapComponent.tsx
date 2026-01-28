@@ -61,6 +61,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
   const mapInstance = useRef<any>(null);
   const leafletRef = useRef<any>(null);
   const onLocationSelectRef = useRef<MapComponentProps['onLocationSelect']>(onLocationSelect);
+  const onRegionSelectRef = useRef<MapComponentProps['onRegionSelect']>(onRegionSelect);
+  const userLocationRef = useRef<MapComponentProps['userLocation']>(userLocation);
+  const calculateDistanceRef = useRef<MapComponentProps['calculateDistance']>(calculateDistance);
   const markersRef = useRef<any[]>([]);
   const polygonsRef = useRef<any[]>([]);
   const labelsRef = useRef<any[]>([]);
@@ -111,6 +114,18 @@ const MapComponent: React.FC<MapComponentProps> = ({
   useEffect(() => {
     onLocationSelectRef.current = onLocationSelect;
   }, [onLocationSelect]);
+
+  useEffect(() => {
+    onRegionSelectRef.current = onRegionSelect;
+  }, [onRegionSelect]);
+
+  useEffect(() => {
+    userLocationRef.current = userLocation;
+  }, [userLocation]);
+
+  useEffect(() => {
+    calculateDistanceRef.current = calculateDistance;
+  }, [calculateDistance]);
 
   useEffect(() => {
     // default collapsed on small viewports
@@ -257,11 +272,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
   useEffect(() => {
     if (useInlineSvg) return;
 
+    // Abort token for this init attempt (helps avoid async work after unmount/retry)
+    const token = ++initTokenRef.current;
+
     const initMap = async () => {
       if (!mapRef.current) return;
-
-      // Abort token for this init attempt (helps avoid async work after unmount/retry)
-      const token = ++initTokenRef.current;
 
       // Check if the DOM element already has a Leaflet map initialized
       if (mapInstance.current) {
@@ -415,7 +430,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
     // When viewport changes (orientation/rotation), tell Leaflet to recalc size so it doesn't remain clipped
     const handleResize = () => {
       if (mapInstance.current && typeof mapInstance.current.invalidateSize === 'function') {
-        try { mapInstance.current.invalidateSize({ immediate: false }); } catch (e) { /* ignore */ }
+        try { mapInstance.current.invalidateSize({ immediate: false }); } catch { /* ignore */ }
       }
     };
     window.addEventListener('resize', handleResize);
@@ -426,7 +441,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
       window.removeEventListener('orientationchange', handleResize);
 
       // Invalidate pending async work
-      initTokenRef.current++;
+      initTokenRef.current = token + 1;
 
       if (invalidateSizeTimeoutRef.current != null) {
         try { window.clearTimeout(invalidateSizeTimeoutRef.current); } catch { /* ignore */ }
@@ -604,21 +619,24 @@ const MapComponent: React.FC<MapComponentProps> = ({
         const marker = L.marker(location.coordinates, { icon: customIcon });
 
         const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
+        const meta = location as unknown as { brand?: unknown; model?: unknown };
         const isMinimalDirectorateUI =
-          normalizeDirectorateField((location as any).brand) === 'BÖLGE' &&
-          normalizeDirectorateField((location as any).model) === 'MÜDÜRLÜK';
+          normalizeDirectorateField(meta.brand) === 'BÖLGE' &&
+          normalizeDirectorateField(meta.model) === 'MÜDÜRLÜK';
         
         // Calculate distance from user location
         let distanceText = '';
-        if (userLocation && calculateDistance) {
-          const distance = calculateDistance(
-            userLocation[0],
-            userLocation[1],
+        const ul = userLocationRef.current;
+        const cd = calculateDistanceRef.current;
+        if (ul && cd) {
+          const distance = cd(
+            ul[0],
+            ul[1],
             location.coordinates[0],
             location.coordinates[1]
           );
           console.log(`📏 ${location.name} mesafesi:`, {
-            from: userLocation,
+            from: ul,
             to: location.coordinates,
             distance: distance.toFixed(2) + ' km'
           });
@@ -967,7 +985,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
               const center = layer.getBounds().getCenter();
               const labelHtml = `<div style="background: rgba(255,255,255,0.92); padding:6px 8px; border-radius:8px; font-weight:700; font-size:12px; box-shadow:0 4px 12px rgba(0,0,0,0.08);">1. Bölge</div>`;
               const label = L.marker([center.lat, center.lng], { interactive: true, icon: L.divIcon({ className: 'region-label', html: labelHtml, iconSize: [120, 32], iconAnchor: [60, 16] }) }).addTo(mapInstance.current);
-              label.on('click', () => { if (onRegionSelect) onRegionSelect(1); });
+              label.on('click', () => { onRegionSelectRef.current?.(1); });
               polygonsRef.current.push({ poly: layer, region: { id: 1 } });
               labelsRef.current.push({ label, region: { id: 1 } });
               paintedLayers.push(layer);
@@ -1041,7 +1059,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
         }).addTo(mapInstance.current);
 
         poly.on('click', () => {
-          if (onRegionSelect) onRegionSelect(region.id);
+          onRegionSelectRef.current?.(region.id);
           poly.setStyle({ fillOpacity: 0.5 });
         });
 
@@ -1059,7 +1077,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
         }).addTo(mapInstance.current);
 
         label.on('click', () => {
-          if (onRegionSelect) onRegionSelect(region.id);
+          onRegionSelectRef.current?.(region.id);
         });
 
         labelsRef.current.push({ label, region });

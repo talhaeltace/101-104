@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react';
 import {
+  Users, X, RefreshCw, UserPlus, Shield, Edit3, Trash2, 
+  CheckCircle2, AlertCircle, Search, Crown, Eye, Pencil, 
+  ChevronDown, Mail, Phone, Calendar, Zap,
+  Lock, Unlock, UserCheck
+} from 'lucide-react';
+import {
   AppUser,
   UserPermissions,
   DEFAULT_PERMISSIONS,
@@ -16,6 +22,37 @@ interface AdminPanelProps {
   onClose: () => void;
 }
 
+const roleConfig: Record<string, { label: string; color: string; bgColor: string; borderColor: string; icon: React.ElementType }> = {
+  admin: {
+    label: 'Admin',
+    color: 'text-red-600',
+    bgColor: 'bg-red-100',
+    borderColor: 'border-red-200',
+    icon: Crown
+  },
+  editor: {
+    label: 'Editör',
+    color: 'text-blue-600',
+    bgColor: 'bg-blue-100',
+    borderColor: 'border-blue-200',
+    icon: Pencil
+  },
+  viewer: {
+    label: 'Görüntüleyici',
+    color: 'text-gray-600',
+    bgColor: 'bg-gray-100',
+    borderColor: 'border-gray-200',
+    icon: Eye
+  },
+  user: {
+    label: 'Kullanıcı',
+    color: 'text-emerald-600',
+    bgColor: 'bg-emerald-100',
+    borderColor: 'border-emerald-200',
+    icon: UserCheck
+  }
+};
+
 export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) {
   useBodyScrollLock(true);
 
@@ -27,8 +64,9 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
   const [isPermissionsModalOpen, setIsPermissionsModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
 
-  // Yetki formu
   const [permissionsForm, setPermissionsForm] = useState<UserPermissions>({
     can_view: true,
     can_edit: false,
@@ -40,7 +78,6 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
     can_manual_gps: false
   });
 
-  // Yeni kullanıcı formu
   const [newUser, setNewUser] = useState({
     username: '',
     password: '',
@@ -50,7 +87,6 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
     phone: ''
   });
 
-  // Düzenleme formu
   const [editUser, setEditUser] = useState({
     username: '',
     password: '',
@@ -71,7 +107,7 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
     try {
       const usersData = await listUsers();
       setUsers(usersData);
-    } catch (err) {
+    } catch {
       setError('Veriler yüklenirken hata oluştu');
     }
     setLoading(false);
@@ -174,7 +210,6 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
     setIsPermissionsModalOpen(true);
   };
 
-
   const handleSavePermissions = async () => {
     if (!selectedUser) return;
 
@@ -191,19 +226,9 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleDateString('tr-TR');
+    return new Date(dateStr).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' });
   };
 
-  const getRoleBadgeColor = (role: string) => {
-    switch (role) {
-      case 'admin': return 'bg-red-100 text-red-800';
-      case 'editor': return 'bg-blue-100 text-blue-800';
-      case 'viewer': return 'bg-gray-100 text-gray-800';
-      default: return 'bg-green-100 text-green-800';
-    }
-  };
-
-  // Auto-hide messages
   useEffect(() => {
     if (error) {
       const timer = setTimeout(() => setError(null), 5000);
@@ -218,290 +243,351 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
     }
   }, [successMessage]);
 
+  // Stats
+  const stats = {
+    total: users.length,
+    active: users.filter(u => u.is_active).length,
+    admins: users.filter(u => u.role === 'admin').length,
+    editors: users.filter(u => u.role === 'editor').length
+  };
+
+  // Filtered users
+  const filteredUsers = users.filter(u => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return u.username.toLowerCase().includes(q) || 
+           u.full_name?.toLowerCase().includes(q) ||
+           u.email?.toLowerCase().includes(q);
+  });
+
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[1200]">
-      <div className="bg-white w-full h-full overflow-hidden flex flex-col overscroll-contain">
+    <div className="fixed inset-0 z-[99999] bg-gray-50 overflow-hidden">
+      <div className="w-full h-full flex flex-col overflow-hidden">
+
         {/* Header */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900 text-white">
-          <h2 className="text-lg sm:text-xl font-bold flex items-center gap-2 flex-1 min-w-0">
-            <svg className="w-6 h-6 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-            </svg>
-            <span className="truncate">Admin Paneli</span>
-          </h2>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors shrink-0"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+        <header className="shrink-0 bg-white border-b border-gray-200 shadow-sm safe-area-top">
+          <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <div className="p-2 sm:p-2.5 bg-gradient-to-br from-rose-500 to-rose-600 rounded-lg sm:rounded-xl shadow-sm shrink-0">
+                <Users className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-base sm:text-lg font-bold text-gray-800 truncate">Admin Paneli</h1>
+                <p className="text-[10px] sm:text-xs text-gray-500">Kullanıcı ve yetki yönetimi</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              <button
+                onClick={loadData}
+                disabled={loading}
+                className="p-1.5 sm:p-2 hover:bg-gray-100 rounded-lg sm:rounded-xl text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 sm:w-5 sm:h-5 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+              <button onClick={onClose} className="p-1.5 sm:p-2 hover:bg-gray-100 rounded-lg sm:rounded-xl text-gray-500 hover:text-gray-700 transition-colors">
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Stats Cards - 2x2 on mobile */}
+          <div className="px-3 sm:px-4 pb-3 sm:pb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">
+              <div className="bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-gray-200/60">
+                <div className="flex items-center gap-1 sm:gap-2 mb-0.5 sm:mb-1">
+                  <Users className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
+                  <span className="text-[9px] sm:text-[10px] uppercase tracking-wide text-gray-500">Toplam</span>
+                </div>
+                <div className="text-lg sm:text-xl font-bold text-gray-800">{stats.total}</div>
+              </div>
+              <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-emerald-200/60">
+                <div className="flex items-center gap-1 sm:gap-2 mb-0.5 sm:mb-1">
+                  <Zap className="w-3 h-3 sm:w-4 sm:h-4 text-emerald-600" />
+                  <span className="text-[9px] sm:text-[10px] uppercase tracking-wide text-emerald-600">Aktif</span>
+                </div>
+                <div className="text-lg sm:text-xl font-bold text-emerald-600">{stats.active}</div>
+              </div>
+              <div className="bg-gradient-to-br from-red-50 to-red-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-red-200/60">
+                <div className="flex items-center gap-1 sm:gap-2 mb-0.5 sm:mb-1">
+                  <Crown className="w-3 h-3 sm:w-4 sm:h-4 text-red-600" />
+                  <span className="text-[9px] sm:text-[10px] uppercase tracking-wide text-red-600">Admin</span>
+                </div>
+                <div className="text-lg sm:text-xl font-bold text-red-600">{stats.admins}</div>
+              </div>
+              <div className="bg-gradient-to-br from-blue-50 to-blue-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-blue-200/60">
+                <div className="flex items-center gap-1 sm:gap-2 mb-0.5 sm:mb-1">
+                  <Pencil className="w-3 h-3 sm:w-4 sm:h-4 text-blue-600" />
+                  <span className="text-[9px] sm:text-[10px] uppercase tracking-wide text-blue-600">Editör</span>
+                </div>
+                <div className="text-lg sm:text-xl font-bold text-blue-600">{stats.editors}</div>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Search & Actions */}
+        <div className="shrink-0 px-3 sm:px-4 py-2.5 sm:py-3 bg-gray-50 border-b border-gray-200">
+          <div className="flex gap-2 sm:gap-3">
+            <div className="flex-1 relative min-w-0">
+              <Search className="absolute left-2.5 sm:left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400" />
+              <input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Kullanıcı ara..."
+                className="w-full pl-8 sm:pl-10 pr-3 sm:pr-4 py-2 sm:py-2.5 bg-white border border-gray-200 rounded-lg sm:rounded-xl text-gray-800 placeholder-gray-400 text-xs sm:text-sm focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500/50 transition-all"
+              />
+            </div>
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="px-3 sm:px-4 py-2 sm:py-2.5 bg-rose-600 text-white rounded-lg sm:rounded-xl text-xs sm:text-sm font-semibold shadow-sm hover:bg-rose-700 transition-all flex items-center gap-1.5 sm:gap-2 shrink-0"
+            >
+              <UserPlus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span className="hidden xs:inline">Yeni</span> <span className="hidden sm:inline">Kullanıcı</span>
+            </button>
+          </div>
         </div>
 
         {/* Messages */}
         {error && (
-          <div className="mx-4 mt-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded-lg flex items-center gap-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            {error}
+          <div className="mx-3 sm:mx-4 mt-3 sm:mt-4 p-2.5 sm:p-3 bg-red-50 border border-red-200 rounded-lg sm:rounded-xl flex items-center gap-2 sm:gap-3">
+            <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5 text-red-600 shrink-0" />
+            <span className="text-xs sm:text-sm text-red-700">{error}</span>
           </div>
         )}
         {successMessage && (
-          <div className="mx-4 mt-4 p-3 bg-green-100 border border-green-300 text-green-700 rounded-lg flex items-center gap-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-            {successMessage}
+          <div className="mx-3 sm:mx-4 mt-3 sm:mt-4 p-2.5 sm:p-3 bg-emerald-50 border border-emerald-200 rounded-lg sm:rounded-xl flex items-center gap-2 sm:gap-3">
+            <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
+            <span className="text-xs sm:text-sm text-emerald-700">{successMessage}</span>
           </div>
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-auto p-4 overscroll-contain">
+        <div className="flex-1 overflow-y-auto p-2.5 sm:p-4 bg-gray-50 overflow-x-hidden">
           {loading ? (
-            <div className="flex items-center justify-center h-64">
-              <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent"></div>
+            <div className="flex flex-col items-center justify-center py-12 sm:py-16">
+              <div className="relative">
+                <div className="absolute inset-0 bg-rose-500/20 rounded-full blur-xl animate-pulse" />
+                <RefreshCw className="relative w-10 h-10 sm:w-12 sm:h-12 animate-spin text-rose-600" />
+              </div>
+              <p className="text-gray-500 mt-4 text-sm sm:text-base">Kullanıcılar yükleniyor...</p>
+            </div>
+          ) : filteredUsers.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 sm:py-16">
+              <div className="p-3 sm:p-4 bg-gradient-to-br from-gray-50 to-gray-100 rounded-2xl mb-3 shadow-sm">
+                <Users className="w-10 h-10 sm:w-12 sm:h-12 text-gray-400" />
+              </div>
+              <p className="text-base sm:text-lg font-medium text-gray-500 text-center">
+                {searchQuery ? 'Kullanıcı bulunamadı' : 'Henüz kullanıcı yok'}
+              </p>
             </div>
           ) : (
-            <>
-              {/* Actions */}
-              <div className="mb-4 flex flex-col sm:flex-row gap-2">
-                <button
-                  onClick={() => setIsCreateModalOpen(true)}
-                  className="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                  </svg>
-                  Yeni Kullanıcı
-                </button>
-                <button
-                  onClick={() => {
-                    loadData();
-                  }}
-                  className="w-full sm:w-auto px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center justify-center gap-2 transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Yenile
-                </button>
-              </div>
+            <div className="space-y-2 sm:space-y-3">
+              {filteredUsers.map(user => {
+                const config = roleConfig[user.role] || roleConfig.user;
+                const isExpanded = expandedUserId === user.id;
+                const isSelf = user.id === currentUserId;
 
-                  {/* Users (Desktop table) */}
-                  <div className="hidden md:block rounded-lg border border-gray-200 overflow-hidden">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="bg-gray-50 border-b">
-                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Kullanıcı</th>
-                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Rol</th>
-                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Yetkiler</th>
-                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Durum</th>
-                          <th className="p-3 text-left text-sm font-semibold text-gray-600">Kayıt Tarihi</th>
-                          <th className="p-3 text-center text-sm font-semibold text-gray-600">İşlemler</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {users.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} className="p-8 text-center text-gray-500">
-                              Henüz kullanıcı bulunmuyor
-                            </td>
-                          </tr>
-                        ) : (
-                          users.map(user => (
-                            <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                              <td className="p-3">
-                                <div className="flex items-center gap-3">
-                                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold">
-                                    {user.username.charAt(0).toUpperCase()}
-                                  </div>
-                                  <div>
-                                    <div className="font-medium text-gray-900">{user.username}</div>
-                                    {user.full_name && <div className="text-sm text-gray-500">{user.full_name}</div>}
-                                    {user.email && <div className="text-xs text-gray-400">{user.email}</div>}
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="p-3">
-                                <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
-                                  {user.role === 'admin' ? 'Admin' : user.role === 'editor' ? 'Editör' : user.role === 'viewer' ? 'Görüntüleyici' : 'Kullanıcı'}
-                                </span>
-                              </td>
-                              <td className="p-3">
-                                <div className="flex flex-wrap gap-1">
-                                  {user.can_view && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">Görüntüle</span>}
-                                  {user.can_edit && <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">Düzenle</span>}
-                                  {user.can_create && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">Ekle</span>}
-                                  {user.can_delete && <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs">Sil</span>}
-                                  {user.can_export && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">Dışa Aktar</span>}
-                                  {user.can_route && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs">Rota</span>}
-                                  {user.can_team_view && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs">Ekip</span>}
-                                </div>
-                              </td>
-                              <td className="p-3">
-                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                  <span className={`w-1.5 h-1.5 rounded-full ${user.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                                  {user.is_active ? 'Aktif' : 'Pasif'}
-                                </span>
-                              </td>
-                              <td className="p-3 text-sm text-gray-500">
-                                {formatDate(user.created_at)}
-                              </td>
-                              <td className="p-3">
-                                <div className="flex justify-center gap-1">
-                                  <button
-                                    onClick={() => openEditModal(user)}
-                                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                    title="Düzenle"
-                                  >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                    </svg>
-                                  </button>
-                                  <button
-                                    onClick={() => openPermissionsModal(user)}
-                                    className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                                    title="Yetkiler"
-                                  >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                                    </svg>
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteUser(user.id)}
-                                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                                    title="Sil"
-                                    disabled={user.id === currentUserId}
-                                  >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                    </svg>
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                return (
+                  <div 
+                    key={user.id} 
+                    className={`bg-white border rounded-xl sm:rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all ${
+                      user.is_active ? config.borderColor : 'border-gray-200'
+                    }`}
+                  >
+                    {/* User Header */}
+                    <div 
+                      className="p-2.5 sm:p-4 cursor-pointer"
+                      onClick={() => setExpandedUserId(isExpanded ? null : user.id)}
+                    >
+                      <div className="flex items-center gap-2.5 sm:gap-2.5 sm:gap-4">
+                        {/* Avatar */}
+                        <div className="relative shrink-0">
+                          <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl flex items-center justify-center text-white font-bold text-base sm:text-lg shadow-sm ${
+                            user.is_active ? 'bg-gradient-to-br from-rose-500 to-rose-600' : 'bg-gray-400'
+                          }`}>
+                            {user.username.charAt(0).toUpperCase()}
+                          </div>
+                          <span className={`absolute -bottom-0.5 -right-0.5 sm:-bottom-1 sm:-right-1 w-3 h-3 sm:w-4 sm:h-4 rounded-full border-2 border-white ${
+                            user.is_active ? 'bg-emerald-500' : 'bg-gray-400'
+                          }`} />
+                        </div>
 
-                  {/* Users (Mobile cards) */}
-                  <div className="md:hidden space-y-3">
-                    {users.length === 0 ? (
-                      <div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-sm text-gray-500">
-                        Henüz kullanıcı bulunmuyor
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1 sm:gap-2 mb-0.5 sm:mb-1 flex-wrap">
+                            <h3 className="font-semibold text-gray-800 truncate text-sm sm:text-base">{user.username}</h3>
+                            {isSelf && (
+                              <span className="px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-[10px] font-bold uppercase tracking-wide rounded-full bg-rose-100 text-rose-600 shrink-0">
+                                Sen
+                              </span>
+                            )}
+                            <span className={`px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-[10px] font-bold uppercase tracking-wide rounded-full shrink-0 ${config.bgColor} ${config.color}`}>
+                              {config.label}
+                            </span>
+                          </div>
+                          
+                          <div className="flex flex-wrap items-center gap-x-2 sm:gap-x-3 gap-y-0.5 text-[10px] sm:text-xs text-gray-500">
+                            {user.full_name && (
+                              <span className="truncate max-w-[100px] sm:max-w-none">{user.full_name}</span>
+                            )}
+                            {user.email && (
+                              <span className="hidden sm:flex items-center gap-1 truncate">
+                                <Mail className="w-3 h-3" />
+                                {user.email}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Status */}
+                        <div className="shrink-0 flex items-center gap-1 sm:gap-2">
+                          <span className={`hidden sm:flex items-center gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-medium ${
+                            user.is_active ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {user.is_active ? <Unlock className="w-2.5 h-2.5 sm:w-3 sm:h-3" /> : <Lock className="w-2.5 h-2.5 sm:w-3 sm:h-3" />}
+                            {user.is_active ? 'Aktif' : 'Pasif'}
+                          </span>
+                          <ChevronDown className={`w-4 h-4 sm:w-5 sm:h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        </div>
                       </div>
-                    ) : (
-                      users.map(user => (
-                        <div key={user.id} className="rounded-lg border border-gray-200 bg-white p-3">
-                          <div className="flex items-start gap-3 min-w-0">
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold shrink-0">
-                              {user.username.charAt(0).toUpperCase()}
+                    </div>
+
+                    {/* Expanded Content */}
+                    {isExpanded && (
+                      <div className="px-4 pb-4 border-t border-gray-100">
+                        <div className="pt-4 space-y-4">
+                          {/* User Details */}
+                          <div className="grid grid-cols-2 gap-1.5 sm:gap-3">
+                            <div className="bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-gray-200/60">
+                              <div className="text-[8px] sm:text-[10px] uppercase text-gray-500 mb-0.5 sm:mb-1">E-posta</div>
+                              <div className="text-[10px] sm:text-sm text-gray-800 font-medium flex items-center gap-1 sm:gap-2 truncate">
+                                <Mail className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400 shrink-0" />
+                                <span className="truncate">{user.email || '-'}</span>
+                              </div>
                             </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="font-medium text-gray-900 truncate">{user.username}</div>
-                              {user.full_name && <div className="text-sm text-gray-500 truncate">{user.full_name}</div>}
-                              {user.email && <div className="text-xs text-gray-400 truncate">{user.email}</div>}
+                            <div className="bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-gray-200/60">
+                              <div className="text-[8px] sm:text-[10px] uppercase text-gray-500 mb-0.5 sm:mb-1">Telefon</div>
+                              <div className="text-[10px] sm:text-sm text-gray-800 font-medium flex items-center gap-1 sm:gap-2">
+                                <Phone className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400 shrink-0" />
+                                {user.phone || '-'}
+                              </div>
+                            </div>
+                            <div className="bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-gray-200/60">
+                              <div className="text-[8px] sm:text-[10px] uppercase text-gray-500 mb-0.5 sm:mb-1">Kayıt Tarihi</div>
+                              <div className="text-[10px] sm:text-sm text-gray-800 font-medium flex items-center gap-1 sm:gap-2">
+                                <Calendar className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400 shrink-0" />
+                                {formatDate(user.created_at)}
+                              </div>
+                            </div>
+                            <div className="bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-gray-200/60">
+                              <div className="text-[8px] sm:text-[10px] uppercase text-gray-500 mb-0.5 sm:mb-1">OTP Durumu</div>
+                              <div className="text-[10px] sm:text-sm text-gray-800 font-medium flex items-center gap-1 sm:gap-2">
+                                <Shield className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400 shrink-0" />
+                                {user.otp_required !== false ? 'Zorunlu' : 'Kapalı'}
+                              </div>
                             </div>
                           </div>
 
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
-                            <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
-                              {user.role === 'admin' ? 'Admin' : user.role === 'editor' ? 'Editör' : user.role === 'viewer' ? 'Görüntüleyici' : 'Kullanıcı'}
-                            </span>
-                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${user.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                              {user.is_active ? 'Aktif' : 'Pasif'}
-                            </span>
-                            <span className="text-xs text-gray-500">{formatDate(user.created_at)}</span>
+                          {/* Permissions */}
+                          <div className="bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-lg sm:rounded-xl p-2 sm:p-3 border border-gray-200/60">
+                            <div className="text-[8px] sm:text-[10px] uppercase text-gray-500 mb-1.5 sm:mb-2">Yetkiler</div>
+                            <div className="flex flex-wrap gap-1 sm:gap-1.5">
+                              {user.can_view && <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-blue-50 text-blue-600 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-medium border border-blue-200/60">Görüntüle</span>}
+                              {user.can_edit && <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-amber-50 text-amber-600 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-medium border border-amber-200/60">Düzenle</span>}
+                              {user.can_create && <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-emerald-50 text-emerald-600 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-medium border border-emerald-200/60">Ekle</span>}
+                              {user.can_delete && <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-red-50 text-red-600 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-medium border border-red-200/60">Sil</span>}
+                              {user.can_export && <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-purple-50 text-purple-600 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-medium border border-purple-200/60">Dışa Aktar</span>}
+                              {user.can_route && <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-indigo-50 text-indigo-600 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-medium border border-indigo-200/60">Rota</span>}
+                              {user.can_team_view && <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-teal-50 text-teal-600 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-medium border border-teal-200/60">Ekip</span>}
+                              {user.can_manual_gps && <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-gray-100 text-gray-600 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-medium border border-gray-200/60">Manuel GPS</span>}
+                            </div>
                           </div>
 
-                          <div className="mt-3 flex flex-wrap gap-1">
-                            {user.can_view && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">Görüntüle</span>}
-                            {user.can_edit && <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">Düzenle</span>}
-                            {user.can_create && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">Ekle</span>}
-                            {user.can_delete && <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs">Sil</span>}
-                            {user.can_export && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">Dışa Aktar</span>}
-                            {user.can_route && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs">Rota</span>}
-                            {user.can_team_view && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs">Ekip</span>}
-                          </div>
-
-                          <div className="mt-3 flex justify-end gap-2">
+                          {/* Actions */}
+                          <div className="flex gap-1.5 sm:gap-2">
                             <button
                               onClick={() => openEditModal(user)}
-                              className="px-3 py-2 text-sm font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                              className="flex-1 px-2 sm:px-4 py-2 sm:py-2.5 bg-blue-50 text-blue-600 rounded-lg sm:rounded-xl text-[10px] sm:text-sm font-semibold hover:bg-blue-100 transition-all flex items-center justify-center gap-1 sm:gap-2 border border-blue-200"
                             >
-                              Düzenle
+                              <Edit3 className="w-3 h-3 sm:w-4 sm:h-4" />
+                              <span className="hidden xs:inline">Düzenle</span>
                             </button>
                             <button
                               onClick={() => openPermissionsModal(user)}
-                              className="px-3 py-2 text-sm font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
+                              className="flex-1 px-2 sm:px-4 py-2 sm:py-2.5 bg-purple-50 text-purple-600 rounded-lg sm:rounded-xl text-[10px] sm:text-sm font-semibold hover:bg-purple-100 transition-all flex items-center justify-center gap-1 sm:gap-2 border border-purple-200"
                             >
-                              Yetkiler
+                              <Shield className="w-3 h-3 sm:w-4 sm:h-4" />
+                              <span className="hidden xs:inline">Yetkiler</span>
                             </button>
-                            <button
-                              onClick={() => handleDeleteUser(user.id)}
-                              className="px-3 py-2 text-sm font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50"
-                              disabled={user.id === currentUserId}
-                            >
-                              Sil
-                            </button>
+                            {!isSelf && (
+                              <button
+                                onClick={() => handleDeleteUser(user.id)}
+                                className="px-2 sm:px-4 py-2 sm:py-2.5 bg-red-50 text-red-600 rounded-lg sm:rounded-xl text-[10px] sm:text-sm font-semibold hover:bg-red-100 transition-all flex items-center justify-center gap-1 sm:gap-2 border border-red-200"
+                              >
+                                <Trash2 className="w-3 h-3 sm:w-4 sm:h-4" />
+                              </button>
+                            )}
                           </div>
                         </div>
-                      ))
+                      </div>
                     )}
                   </div>
-
-                  {/* User count */}
-                  <div className="mt-4 text-sm text-gray-500">
-                    Toplam {users.length} kullanıcı
-                  </div>
-            </>
+                );
+              })}
+            </div>
           )}
         </div>
 
+        {/* Footer */}
+        <footer className="shrink-0 px-3 sm:px-4 py-2 sm:py-3 bg-white border-t border-gray-200 safe-area-bottom">
+          <div className="flex items-center justify-between text-[10px] sm:text-xs text-gray-500">
+            <span className="flex items-center gap-1.5 sm:gap-2">
+              <Users className="w-3 h-3 sm:w-4 sm:h-4" />
+              {users.length} kullanıcı kayıtlı
+            </span>
+            <span className="px-1.5 sm:px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded-md font-medium">
+              {stats.active} aktif
+            </span>
+          </div>
+        </footer>
+
         {/* Create User Modal */}
         {isCreateModalOpen && (
-          <div className="fixed inset-0 bg-black/50 z-[1210] p-4 overflow-y-auto">
-            <div className="min-h-full flex items-start sm:items-center justify-center">
-              <div className="bg-white rounded-xl p-5 sm:p-6 w-full max-w-md shadow-2xl my-8">
-              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-                </svg>
-                Yeni Kullanıcı Oluştur
-              </h3>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100000] p-2 sm:p-4 flex items-end sm:items-center justify-center">
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center gap-2 sm:gap-3 mb-4 sm:mb-6">
+                <div className="p-2 sm:p-2.5 bg-gradient-to-br from-rose-500 to-rose-600 rounded-lg sm:rounded-xl shadow-sm">
+                  <UserPlus className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                </div>
+                <h3 className="text-base sm:text-lg font-bold text-gray-800">Yeni Kullanıcı</h3>
+              </div>
               
-              <div className="space-y-4">
+              <div className="space-y-3 sm:space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Kullanıcı Adı *</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Kullanıcı Adı *</label>
                   <input
                     type="text"
                     value={newUser.username}
                     onChange={e => setNewUser({...newUser, username: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder=""
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500/50"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Şifre *</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Şifre *</label>
                   <input
                     type="password"
                     value={newUser.password}
                     onChange={e => setNewUser({...newUser, password: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder=""
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500/50"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Rol</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Rol</label>
                   <select
                     value={newUser.role}
                     onChange={e => setNewUser({...newUser, role: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500/50"
                   >
                     <option value="user">Kullanıcı</option>
                     <option value="viewer">Görüntüleyici</option>
@@ -510,94 +596,92 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Ad Soyad</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Ad Soyad</label>
                   <input
                     type="text"
                     value={newUser.fullName}
                     onChange={e => setNewUser({...newUser, fullName: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder=""
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500/50"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">E-posta</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">E-posta</label>
                   <input
                     type="email"
                     value={newUser.email}
                     onChange={e => setNewUser({...newUser, email: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder=""
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500/50"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Telefon</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Telefon</label>
                   <input
                     type="tel"
                     value={newUser.phone}
                     onChange={e => setNewUser({...newUser, phone: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder=""
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500/50"
                   />
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 mt-6">
+              <div className="flex gap-2 sm:gap-3 mt-4 sm:mt-6">
                 <button
                   onClick={() => setIsCreateModalOpen(false)}
-                  className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-gray-100 text-gray-700 rounded-lg sm:rounded-xl text-sm font-medium hover:bg-gray-200 transition-colors"
                 >
                   İptal
                 </button>
                 <button
                   onClick={handleCreateUser}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-rose-600 text-white rounded-lg sm:rounded-xl text-sm font-semibold shadow-sm hover:bg-rose-700 transition-all"
                 >
                   Oluştur
                 </button>
               </div>
-            </div>
             </div>
           </div>
         )}
 
         {/* Edit User Modal */}
         {isEditModalOpen && selectedUser && (
-          <div className="fixed inset-0 bg-black/50 z-[1210] p-4 overflow-y-auto">
-            <div className="min-h-full flex items-start sm:items-center justify-center">
-              <div className="bg-white rounded-xl p-5 sm:p-6 w-full max-w-md shadow-2xl my-8">
-              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-                Kullanıcı Düzenle: {selectedUser.username}
-              </h3>
-              
-              <div className="space-y-4">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100000] p-2 sm:p-4 flex items-end sm:items-center justify-center">
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center gap-2 sm:gap-3 mb-4 sm:mb-6">
+                <div className="p-2 sm:p-2.5 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg sm:rounded-xl shadow-sm">
+                  <Edit3 className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Kullanıcı Adı</label>
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800">Kullanıcı Düzenle</h3>
+                  <p className="text-xs sm:text-sm text-gray-500">{selectedUser.username}</p>
+                </div>
+              </div>
+              
+              <div className="space-y-3 sm:space-y-4">
+                <div>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Kullanıcı Adı</label>
                   <input
                     type="text"
                     value={editUser.username}
                     onChange={e => setEditUser({...editUser, username: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Yeni Şifre (boş bırakılırsa değişmez)</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Yeni Şifre (boş = değişmez)</label>
                   <input
                     type="password"
                     value={editUser.password}
                     onChange={e => setEditUser({...editUser, password: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder=""
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
+                    placeholder="••••••••"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Rol</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Rol</label>
                   <select
                     value={editUser.role}
                     onChange={e => setEditUser({...editUser, role: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
                   >
                     <option value="user">Kullanıcı</option>
                     <option value="viewer">Görüntüleyici</option>
@@ -606,218 +690,138 @@ export default function AdminPanel({ currentUserId, onClose }: AdminPanelProps) 
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Ad Soyad</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Ad Soyad</label>
                   <input
                     type="text"
                     value={editUser.fullName}
                     onChange={e => setEditUser({...editUser, fullName: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">E-posta</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">E-posta</label>
                   <input
                     type="email"
                     value={editUser.email}
                     onChange={e => setEditUser({...editUser, email: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Telefon</label>
+                  <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Telefon</label>
                   <input
                     type="tel"
                     value={editUser.phone}
                     onChange={e => setEditUser({...editUser, phone: e.target.value})}
-                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full p-2.5 sm:p-3 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl text-sm text-gray-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
                   />
                 </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="isActive"
-                    checked={editUser.isActive}
-                    onChange={e => setEditUser({...editUser, isActive: e.target.checked})}
-                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <label htmlFor="isActive" className="text-sm font-medium text-gray-700">Aktif</label>
-                </div>
-
-                <div className="flex items-start gap-2">
-                  <input
-                    type="checkbox"
-                    id="otpRequired"
-                    checked={editUser.otpRequired}
-                    onChange={e => setEditUser({ ...editUser, otpRequired: e.target.checked })}
-                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 mt-0.5"
-                  />
-                  <label htmlFor="otpRequired" className="text-sm font-medium text-gray-700">
-                    OTP zorunlu
-                    <div className="text-xs text-gray-500 font-normal">Kapalıysa kullanıcı kod beklemeden giriş yapar</div>
+                <div className="flex gap-3 sm:gap-4">
+                  <label className="flex items-center gap-1.5 sm:gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editUser.isActive}
+                      onChange={e => setEditUser({...editUser, isActive: e.target.checked})}
+                      className="w-4 h-4 sm:w-5 sm:h-5 rounded bg-gray-50 border-gray-300 text-emerald-500 focus:ring-emerald-500/50"
+                    />
+                    <span className="text-xs sm:text-sm text-gray-700">Aktif</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 sm:gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editUser.otpRequired}
+                      onChange={e => setEditUser({...editUser, otpRequired: e.target.checked})}
+                      className="w-4 h-4 sm:w-5 sm:h-5 rounded bg-gray-50 border-gray-300 text-purple-500 focus:ring-purple-500/50"
+                    />
+                    <span className="text-xs sm:text-sm text-gray-700">OTP Zorunlu</span>
                   </label>
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 mt-6">
+              <div className="flex gap-2 sm:gap-3 mt-4 sm:mt-6">
                 <button
                   onClick={() => setIsEditModalOpen(false)}
-                  className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-gray-100 text-gray-700 rounded-lg sm:rounded-xl text-sm font-medium hover:bg-gray-200 transition-colors"
                 >
                   İptal
                 </button>
                 <button
                   onClick={handleUpdateUser}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-blue-600 text-white rounded-lg sm:rounded-xl text-sm font-semibold shadow-sm hover:bg-blue-700 transition-all"
                 >
                   Kaydet
                 </button>
               </div>
-            </div>
             </div>
           </div>
         )}
 
         {/* Permissions Modal */}
         {isPermissionsModalOpen && selectedUser && (
-          <div className="fixed inset-0 bg-black/50 z-[1210] p-4 overflow-y-auto">
-            <div className="min-h-full flex items-start sm:items-center justify-center">
-              <div className="bg-white rounded-xl p-5 sm:p-6 w-full max-w-md shadow-2xl my-8">
-              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                </svg>
-                Yetki Yönetimi: {selectedUser.username}
-              </h3>
-
-              <p className="text-sm text-gray-500 mb-4">
-                Bu kullanıcının uygulama içindeki yetkilerini düzenleyin.
-              </p>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100000] p-2 sm:p-4 flex items-end sm:items-center justify-center">
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center gap-2 sm:gap-3 mb-4 sm:mb-6">
+                <div className="p-2 sm:p-2.5 bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg sm:rounded-xl shadow-sm">
+                  <Shield className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800">Yetki Yönetimi</h3>
+                  <p className="text-xs sm:text-sm text-gray-500">{selectedUser.username}</p>
+                </div>
+              </div>
               
-              <div className="space-y-3">
-                <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissionsForm.can_view}
-                    onChange={e => setPermissionsForm({...permissionsForm, can_view: e.target.checked})}
-                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <div>
-                    <div className="font-medium text-gray-900">Görüntüleme</div>
-                    <div className="text-xs text-gray-500">Lokasyonları ve verileri görüntüleyebilir</div>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissionsForm.can_edit}
-                    onChange={e => setPermissionsForm({...permissionsForm, can_edit: e.target.checked})}
-                    className="w-5 h-5 text-yellow-600 rounded focus:ring-yellow-500"
-                  />
-                  <div>
-                    <div className="font-medium text-gray-900">Düzenleme</div>
-                    <div className="text-xs text-gray-500">Mevcut lokasyonları düzenleyebilir</div>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissionsForm.can_create}
-                    onChange={e => setPermissionsForm({...permissionsForm, can_create: e.target.checked})}
-                    className="w-5 h-5 text-green-600 rounded focus:ring-green-500"
-                  />
-                  <div>
-                    <div className="font-medium text-gray-900">Ekleme</div>
-                    <div className="text-xs text-gray-500">Yeni lokasyon ekleyebilir</div>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissionsForm.can_delete}
-                    onChange={e => setPermissionsForm({...permissionsForm, can_delete: e.target.checked})}
-                    className="w-5 h-5 text-red-600 rounded focus:ring-red-500"
-                  />
-                  <div>
-                    <div className="font-medium text-gray-900">Silme</div>
-                    <div className="text-xs text-gray-500">Lokasyonları silebilir</div>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissionsForm.can_export}
-                    onChange={e => setPermissionsForm({...permissionsForm, can_export: e.target.checked})}
-                    className="w-5 h-5 text-purple-600 rounded focus:ring-purple-500"
-                  />
-                  <div>
-                    <div className="font-medium text-gray-900">Dışa Aktarma</div>
-                    <div className="text-xs text-gray-500">Verileri dışa aktarabilir (Excel, PDF vb.)</div>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissionsForm.can_route}
-                    onChange={e => setPermissionsForm({...permissionsForm, can_route: e.target.checked})}
-                    className="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500"
-                  />
-                  <div>
-                    <div className="font-medium text-gray-900">Rota Oluşturma</div>
-                    <div className="text-xs text-gray-500">Route Builder ile rota oluşturabilir</div>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissionsForm.can_team_view}
-                    onChange={e => setPermissionsForm({...permissionsForm, can_team_view: e.target.checked})}
-                    className="w-5 h-5 text-teal-600 rounded focus:ring-teal-500"
-                  />
-                  <div>
-                    <div className="font-medium text-gray-900">Ekip Durumu</div>
-                    <div className="text-xs text-gray-500">Ekip panelini ve diğer kullanıcıları görebilir</div>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissionsForm.can_manual_gps}
-                    onChange={e => setPermissionsForm({...permissionsForm, can_manual_gps: e.target.checked})}
-                    className="w-5 h-5 text-slate-700 rounded focus:ring-slate-500"
-                  />
-                  <div>
-                    <div className="font-medium text-gray-900">Manuel GPS</div>
-                    <div className="text-xs text-gray-500">GPS kapatıp "Adrese Vardım" kaydırmasını hemen kullanabilir</div>
-                  </div>
-                </label>
+              <div className="space-y-1.5 sm:space-y-2">
+                {[
+                  { key: 'can_view', label: 'Görüntüleme', desc: 'Lokasyonları ve verileri görüntüleyebilir', color: 'blue' },
+                  { key: 'can_edit', label: 'Düzenleme', desc: 'Mevcut lokasyonları düzenleyebilir', color: 'amber' },
+                  { key: 'can_create', label: 'Ekleme', desc: 'Yeni lokasyon ekleyebilir', color: 'emerald' },
+                  { key: 'can_delete', label: 'Silme', desc: 'Lokasyonları silebilir', color: 'red' },
+                  { key: 'can_export', label: 'Dışa Aktarma', desc: 'Verileri dışa aktarabilir', color: 'purple' },
+                  { key: 'can_route', label: 'Rota Oluşturma', desc: 'Route Builder ile rota oluşturabilir', color: 'indigo' },
+                  { key: 'can_team_view', label: 'Ekip Durumu', desc: 'Ekip panelini görebilir', color: 'teal' },
+                  { key: 'can_manual_gps', label: 'Manuel GPS', desc: 'GPS olmadan "Adrese Vardım" kullanabilir', color: 'slate' }
+                ].map(perm => (
+                  <label 
+                    key={perm.key} 
+                    className={`flex items-center gap-2 sm:gap-3 p-2 sm:p-3 rounded-lg sm:rounded-xl cursor-pointer transition-colors ${
+                      (permissionsForm as any)[perm.key] 
+                        ? `bg-${perm.color}-50 border border-${perm.color}-200` 
+                        : 'bg-gray-50 border border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={(permissionsForm as any)[perm.key]}
+                      onChange={e => setPermissionsForm({...permissionsForm, [perm.key]: e.target.checked})}
+                      className={`w-4 h-4 sm:w-5 sm:h-5 rounded bg-gray-50 border-gray-300 text-${perm.color}-500 focus:ring-${perm.color}-500/50`}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-xs sm:text-sm font-medium ${(permissionsForm as any)[perm.key] ? 'text-gray-800' : 'text-gray-700'}`}>
+                        {perm.label}
+                      </div>
+                      <div className="text-[10px] sm:text-xs text-gray-500 truncate">{perm.desc}</div>
+                    </div>
+                  </label>
+                ))}
               </div>
 
-              <div className="flex justify-end gap-2 mt-6">
+              <div className="flex gap-2 sm:gap-3 mt-4 sm:mt-6">
                 <button
                   onClick={() => setIsPermissionsModalOpen(false)}
-                  className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-gray-100 text-gray-700 rounded-lg sm:rounded-xl text-sm font-medium hover:bg-gray-200 transition-colors"
                 >
                   İptal
                 </button>
                 <button
                   onClick={handleSavePermissions}
-                  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                  className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-purple-600 text-white rounded-lg sm:rounded-xl text-sm font-semibold shadow-sm hover:bg-purple-700 transition-all"
                 >
                   Kaydet
                 </button>
               </div>
             </div>
-            </div>
           </div>
         )}
-
       </div>
     </div>
   );

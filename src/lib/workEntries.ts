@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { apiFetch } from './apiClient';
 
 export interface WorkEntry {
   id?: number;
@@ -15,23 +15,20 @@ export interface WorkEntry {
 
 export const logWorkEntry = async (entry: WorkEntry): Promise<boolean> => {
   try {
-    const { error } = await supabase.from('work_entries').insert({
-      user_id: String(entry.userId),
-      username: entry.username,
-      location_id: entry.locationId ?? null,
-      location_name: entry.locationName ?? null,
-      departed_at: entry.departedAt ?? null,
-      arrived_at: entry.arrivedAt,
-      completed_at: entry.completedAt,
-      travel_minutes: Number(entry.travelMinutes || 0),
-      work_minutes: Number(entry.workMinutes || 0)
+    await apiFetch('/work-entries', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: String(entry.userId),
+        username: entry.username,
+        location_id: entry.locationId ?? null,
+        location_name: entry.locationName ?? null,
+        departed_at: entry.departedAt ?? null,
+        arrived_at: entry.arrivedAt,
+        completed_at: entry.completedAt,
+        travel_minutes: Number(entry.travelMinutes || 0),
+        work_minutes: Number(entry.workMinutes || 0),
+      }),
     });
-
-    if (error) {
-      console.warn('logWorkEntry error', error);
-      return false;
-    }
-
     return true;
   } catch (e) {
     console.warn('logWorkEntry exception', e);
@@ -57,20 +54,13 @@ export const listWorkEntries = async (params: { startIso: string; endIso: string
   const limit = params.limit ?? 5000;
 
   try {
-    const { data, error } = await supabase
-      .from('work_entries')
-      .select('*')
-      .gte('completed_at', params.startIso)
-      .lte('completed_at', params.endIso)
-      .order('completed_at', { ascending: false })
-      .limit(limit);
-
-    if (error) {
-      console.warn('listWorkEntries error', error);
-      return { ok: false as const, rows: [] as WorkEntryRow[], error };
-    }
-
-    return { ok: true as const, rows: (data || []) as WorkEntryRow[] };
+    const qs = new URLSearchParams({
+      startIso: params.startIso,
+      endIso: params.endIso,
+      limit: String(limit),
+    });
+    const res = await apiFetch(`/work-entries?${qs.toString()}`);
+    return { ok: true as const, rows: ((res as any)?.data ?? []) as WorkEntryRow[] };
   } catch (e) {
     console.warn('listWorkEntries exception', e);
     return { ok: false as const, rows: [] as WorkEntryRow[], error: e };

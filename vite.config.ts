@@ -29,7 +29,6 @@ export default defineConfig({
       }
     } catch (e) {
       // ignore and fall back to http
-      // eslint-disable-next-line no-console
       console.warn('vite.config: could not load local certs for https dev server', e);
     }
 

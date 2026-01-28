@@ -6,6 +6,21 @@ import './index.css';
 
 const rootEl = document.getElementById('root');
 
+const getErrorMessage = (value: unknown): string => {
+  if (!value) return '';
+  if (value instanceof Error) return value.message;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && 'message' in value) {
+    const msg = (value as { message?: unknown }).message;
+    if (typeof msg === 'string') return msg;
+  }
+  try {
+    return String(value);
+  } catch {
+    return '';
+  }
+};
+
 const showBootError = (title: string, details?: string) => {
   try {
     if (!rootEl) return;
@@ -23,17 +38,17 @@ const showBootError = (title: string, details?: string) => {
 };
 
 // IMPORTANT: ESM dependencies execute before this module's body.
-// So we must NOT import App (or anything that imports Supabase) at top-level,
-// otherwise a missing env var can crash before we install handlers.
+// So we must NOT import App (or anything that requires build-time env / heavy deps)
+// at top-level, otherwise a missing env var can crash before we install handlers.
 
 // Catch errors that happen before React mounts
-window.addEventListener('error', (ev: any) => {
-  const msg = ev?.message || ev?.error?.message || String(ev?.error || 'Unknown error');
+window.addEventListener('error', (ev: ErrorEvent) => {
+  const err = (ev as unknown as { error?: unknown }).error;
+  const msg = ev.message || getErrorMessage(err) || 'Unknown error';
   showBootError('Uygulama başlatılamadı', msg);
 });
-window.addEventListener('unhandledrejection', (ev: any) => {
-  const reason = ev?.reason;
-  const msg = reason?.message || String(reason || 'Unhandled rejection');
+window.addEventListener('unhandledrejection', (ev: PromiseRejectionEvent) => {
+  const msg = getErrorMessage(ev.reason) || 'Unhandled rejection';
   showBootError('Uygulama başlatılamadı', msg);
 });
 
@@ -49,7 +64,7 @@ const bootstrap = async () => {
       import('./components/AppErrorBoundary.tsx')
     ]);
 
-    const Router: any = Capacitor.getPlatform() === 'web' ? BrowserRouter : HashRouter;
+    const Router = Capacitor.getPlatform() === 'web' ? BrowserRouter : HashRouter;
 
     createRoot(rootEl).render(
       <StrictMode>
@@ -60,8 +75,8 @@ const bootstrap = async () => {
         </AppErrorBoundary>
       </StrictMode>
     );
-  } catch (err: any) {
-    const msg = err?.message || String(err || 'Boot error');
+  } catch (err: unknown) {
+    const msg = getErrorMessage(err) || 'Boot error';
     showBootError('Uygulama başlatılamadı', msg);
   }
 };

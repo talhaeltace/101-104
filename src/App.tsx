@@ -18,12 +18,11 @@ import LocationTrackingOverlay from './components/LocationTrackingOverlay';
 import TasksPanel from './components/TasksPanel';
 import { VersionChecker } from './components/VersionChecker';
 import { useLocationTracking } from './hooks/useLocationTracking';
-import { logActivity, logArrival, logCompletion } from './lib/activityLogger';
+import { getActivities, logActivity, logArrival, logCompletion } from './lib/activityLogger';
 import { logWorkEntry } from './lib/workEntries';
 import { requestNotificationPermission, notifyArrival, notifyCompletion, notifyNextLocation, notifyRouteCompleted, notifyRouteStarted, notifyPermissionsUpdated, notifyAcceptanceRequest } from './lib/notifications';
 import type { AuthUser } from './lib/authUser';
 import { DEFAULT_PERMISSIONS } from './lib/userPermissions';
-import { supabase } from './lib/supabase';
 import { createAcceptanceRequest, listPendingAcceptanceRequests } from './lib/acceptanceRequests';
 import LoginPage from './pages/LoginPage';
 import TeamPanel from './components/TeamPanel';
@@ -33,10 +32,21 @@ import AdminAssignedTasksFullscreen from './components/AdminAssignedTasksFullscr
 import MesaiTrackingPanel from './components/MesaiTrackingPanel';
 import MessagesOverlay from './components/MessagesOverlay';
 import AdminMessagesOverlay from './components/AdminMessagesOverlay';
+import LiveMapPanel from './components/LiveMapPanel';
 import { updateTeamStatus, clearTeamStatus, getUserRoute, CompletedLocationInfo, calculateMinutesBetween } from './lib/teamStatus';
-import { saveTrackingState, loadTrackingState, clearTrackingState, type RouteTrackingStorage } from './lib/trackingStorage';
+import {
+  saveTrackingState,
+  loadTrackingState,
+  clearTrackingState,
+  savePendingTeamStatusUpdate,
+  loadPendingTeamStatusUpdate,
+  clearPendingTeamStatusUpdate,
+  type RouteTrackingStorage,
+} from './lib/trackingStorage';
 import { updateTaskStatus, type Task } from './lib/tasks';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { fetchMe } from './lib/apiAuth';
+import { apiFetch, setAuthToken } from './lib/apiClient';
 
 function App() {
   const navigate = useNavigate();
@@ -54,6 +64,10 @@ function App() {
 
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
 
+  // Restore session from sessionStorage so refresh/back keeps login,
+  // but closing the tab/app forces re-login.
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
+
   const goToLogin = useCallback((replace = true) => {
     try {
       navigate('/login', { replace });
@@ -68,16 +82,22 @@ function App() {
   const [isAcceptanceApprovalsOpen, setIsAcceptanceApprovalsOpen] = useState(false);
   const [isAssignedTasksAdminOpen, setIsAssignedTasksAdminOpen] = useState(false);
   const [pendingAcceptanceCount, setPendingAcceptanceCount] = useState<number>(0);
+  const knownPendingAcceptanceIdsRef = useRef<Set<number>>(new Set());
 
   // In-app messages (user <-> admin). Opens from main sidebar.
   const [isMessagesOpen, setIsMessagesOpen] = useState(false);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
 
-  const { locations, loading, error, updateLocation, createLocation, deleteLocation } = useLocations();
+  const { locations, loading, error, updateLocation, createLocation, deleteLocation } = useLocations({
+    enabled: !isAuthChecking && !!currentUser,
+  });
   const [isCreateMode, setIsCreateMode] = useState(false);
   const [isRouteModalOpen, setIsRouteModalOpen] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
+  const [activitiesBootstrapState, setActivitiesBootstrapState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [activitiesBootstrapError, setActivitiesBootstrapError] = useState<string | null>(null);
+  const activitiesFetchInFlightRef = useRef(false);
 
   const canUseMessages = !!currentUser;
 
@@ -89,36 +109,22 @@ function App() {
     }
 
     let isCancelled = false;
-    const userId = String(currentUser.id);
     const isAdmin = userRole === 'admin';
 
     const refresh = async () => {
       try {
         if (isAdmin) {
-          const { data, error } = await supabase
-            .from('app_messages')
-            .select('id, user_id, sender_user_id, is_read')
-            .eq('is_read', false);
-
-          if (isCancelled || error) return;
-          const rows = (data ?? []) as any[];
-          // Unread for admin: count user->admin messages (sender == user)
-          const count = rows.filter(r => String(r.sender_user_id) === String(r.user_id)).length;
-          setUnreadMessagesCount(count);
+          const res = await apiFetch('/messages/admin/unread-counts');
+          if (isCancelled) return;
+          const counts = ((res as any)?.data ?? {}) as Record<string, number>;
+          const total = Object.values(counts).reduce((acc, v) => acc + (Number(v) || 0), 0);
+          setUnreadMessagesCount(total);
           return;
         }
 
-        const { data, error } = await supabase
-          .from('app_messages')
-          .select('id, user_id, sender_user_id, is_read')
-          .eq('user_id', userId)
-          .eq('is_read', false);
-
-        if (isCancelled || error) return;
-        const rows = (data ?? []) as any[];
-        // Unread for user: messages sent by others (admins)
-        const count = rows.filter(r => String(r.sender_user_id) !== String(r.user_id)).length;
-        setUnreadMessagesCount(count);
+        const res = await apiFetch('/messages/unread-count');
+        if (isCancelled) return;
+        setUnreadMessagesCount(Number((res as any)?.data ?? 0));
       } catch {
         // ignore
       }
@@ -126,25 +132,40 @@ function App() {
 
     refresh();
 
-    const channel = isAdmin
-      ? supabase
-          .channel(`messages_badge_admin_${userId}`)
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'app_messages' }, () => refresh())
-          .subscribe()
-      : supabase
-          .channel(`messages_badge_${userId}`)
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'app_messages', filter: `user_id=eq.${userId}` },
-            () => refresh()
-          )
-          .subscribe();
+    // Polling replacement for realtime updates.
+    const id = window.setInterval(() => {
+      refresh();
+    }, 10_000);
 
     return () => {
       isCancelled = true;
-      supabase.removeChannel(channel);
+      window.clearInterval(id);
     };
   }, [currentUser, userRole]);
+
+  const refreshActivities = useCallback(async () => {
+    if (activitiesFetchInFlightRef.current) return;
+    activitiesFetchInFlightRef.current = true;
+
+    try {
+      const rows = await getActivities(200);
+      const mapped = (rows || []).map((r: any) => ({
+        id: String(r.id),
+        user: String(r.username ?? ''),
+        action: String(r.action ?? ''),
+        time: String(r.created_at ?? ''),
+        location_id: r.location_id != null ? String(r.location_id) : undefined,
+        location_name: r.location_name != null ? String(r.location_name) : undefined,
+        activity_type: r.activity_type != null ? String(r.activity_type) : undefined,
+        duration_minutes: r.duration_minutes != null ? Number(r.duration_minutes) : undefined,
+      }));
+
+      setActivities(mapped as ActivityEntry[]);
+      if (mapped.length > 0) setLastUpdated(mapped[0].time);
+    } finally {
+      activitiesFetchInFlightRef.current = false;
+    }
+  }, []);
 
   // Manual dismissal timestamps for the pulsing "recent work" highlight per region.
   // If a newer activity happens after dismissal, the pulse will automatically re-appear.
@@ -260,7 +281,6 @@ function App() {
     } catch {
       // ignore
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -407,17 +427,21 @@ function App() {
     const loadRouteFromDb = async () => {
       if (!currentUser) return;
 
+      let localRestored = false;
+      let localSnap: RouteTrackingStorage | null = null;
+
       // Fast local restore first (helps when mobile browser discards tab/offline)
       try {
-        const local = loadTrackingState();
+        localSnap = loadTrackingState();
         const belongsToUser =
-          !!local &&
-          local.isTrackingRoute === true &&
-          Array.isArray(local.activeRoute) &&
-          local.activeRoute.length > 0 &&
-          ((local.userId && local.userId === currentUser.id) || (!local.userId && local.username === currentUser.username));
+          !!localSnap &&
+          localSnap.isTrackingRoute === true &&
+          Array.isArray(localSnap.activeRoute) &&
+          localSnap.activeRoute.length > 0 &&
+          ((localSnap.userId && localSnap.userId === currentUser.id) || (!localSnap.userId && localSnap.username === currentUser.username));
 
         if (belongsToUser) {
+          const local = localSnap as RouteTrackingStorage;
           const idx = Math.max(0, Math.min(local.currentRouteIndex || 0, (local.activeRoute?.length || 1) - 1));
           setActiveRoute(local.activeRoute as any);
           setCurrentRouteIndex(idx);
@@ -436,6 +460,8 @@ function App() {
 
           const currentLoc = (local.activeRoute as any[])[idx] as any;
           if (currentLoc) setFocusLocation(currentLoc);
+
+          localRestored = true;
         }
       } catch {
         // ignore local restore errors
@@ -445,17 +471,51 @@ function App() {
         console.log('Loading route from database for user:', currentUser.id);
         const routeData = await getUserRoute(currentUser.id);
         console.log('Route data from DB:', routeData);
+
+        // If DB fetch failed (offline/network/server), do NOT clear local snapshot.
+        // Keep whatever we could restore locally for maximum stability.
+        if (!routeData) {
+          console.log('Route fetch failed or unavailable; keeping local state if any');
+          return;
+        }
         
         if (routeData && routeData.activeRoute && Array.isArray(routeData.activeRoute) && routeData.activeRoute.length > 0) {
           console.log('Restoring route with', routeData.activeRoute.length, 'locations, index:', routeData.currentRouteIndex);
+
+          // Merge DB + local snapshot defensively to avoid regressions.
+          // DB is the source of truth, but local can be newer if the app was offline.
+          const idsSig = (route: any[] | null | undefined) => {
+            if (!Array.isArray(route)) return '';
+            return route.map((r: any) => String(r?.id ?? '')).join(',');
+          };
+
+          const dbSig = idsSig(routeData.activeRoute as any);
+          const localSig = idsSig(localSnap?.activeRoute as any);
+          const routesMatch = !!dbSig && dbSig === localSig;
+
           const safeIndex = (() => {
             const n = routeData.activeRoute.length;
             const raw = typeof routeData.currentRouteIndex === 'number' ? routeData.currentRouteIndex : Number(routeData.currentRouteIndex);
             const idx = Number.isFinite(raw) ? raw : 0;
             return Math.max(0, Math.min(idx, n - 1));
           })();
+
+          let mergedIndex = safeIndex;
+          if (localRestored && routesMatch && typeof localSnap?.currentRouteIndex === 'number') {
+            const n = routeData.activeRoute.length;
+            mergedIndex = Math.max(0, Math.min(Math.max(safeIndex, localSnap.currentRouteIndex), n - 1));
+          }
+
+          const mergedCompleted = (() => {
+            const db = Array.isArray(routeData.completedLocations) ? routeData.completedLocations : [];
+            const local = Array.isArray(localSnap?.completedLocations) ? (localSnap!.completedLocations as any[]) : [];
+            if (!localRestored || !routesMatch) return db;
+            // Prefer the longer (more progress).
+            return local.length > db.length ? (local as any) : db;
+          })();
+
           setActiveRoute(routeData.activeRoute);
-          setCurrentRouteIndex(safeIndex);
+          setCurrentRouteIndex(mergedIndex);
           setIsTrackingRoute(true);
           // Restore work state
           if (routeData.isWorking !== undefined) {
@@ -465,14 +525,14 @@ function App() {
             });
           }
           // Restore detailed tracking state
-          setCompletedLocations(routeData.completedLocations || []);
+          setCompletedLocations(mergedCompleted || []);
           setCurrentLegStartTime(routeData.currentLegStartTime);
           setTotalTravelMinutes(routeData.totalTravelMinutes || 0);
           setTotalWorkMinutes(routeData.totalWorkMinutes || 0);
           setTodayCompletedCount(routeData.todayCompletedCount || 0);
           
           // Focus on current location
-          const currentLoc = routeData.activeRoute[safeIndex];
+          const currentLoc = routeData.activeRoute[mergedIndex];
           if (currentLoc) {
             setFocusLocation(currentLoc);
           }
@@ -599,6 +659,218 @@ function App() {
     todayCompletedCount
   ]);
 
+  // --- Robust DB sync for route/team status ---
+  // Goal: closing the app / going offline should not "break" an active route.
+  // We keep local snapshot for instant resume and periodically persist full state to DB.
+  const fullTeamStatusInFlightRef = useRef(false);
+  const lastFullTeamStatusHashRef = useRef<string>('');
+
+  const activeRouteLen = activeRoute?.length ?? 0;
+  const userLat = userLocation?.[0] ?? null;
+  const userLng = userLocation?.[1] ?? null;
+
+  const buildFullTeamStatusUpdate = useCallback(() => {
+    if (!currentUser?.id || !currentUser?.username) return null;
+    if (!isTrackingRoute) return null;
+    if (activeRouteLen === 0 || !activeRoute) return null;
+
+    const idx = Math.max(0, Math.min(currentRouteIndex || 0, activeRoute.length - 1));
+    const currentLoc = activeRoute[idx];
+    const nextLoc = idx + 1 < activeRoute.length ? activeRoute[idx + 1] : null;
+
+    const derivedStatus = trackingState.isWorking ? 'adreste' : 'yolda';
+    const completedCount = Array.isArray(completedLocations) ? completedLocations.length : 0;
+
+    return {
+      userId: String(currentUser.id),
+      username: String(currentUser.username),
+      status: derivedStatus as any,
+      currentLocationId: currentLoc?.id != null ? (typeof (currentLoc as any).id === 'number' ? (currentLoc as any).id : parseInt(String((currentLoc as any).id)) || null) : null,
+      currentLocationName: currentLoc?.name ?? null,
+      nextLocationName: nextLoc?.name ?? null,
+      totalRouteCount: activeRoute.length,
+      completedCount,
+      currentLat: userLat,
+      currentLng: userLng,
+      activeRoute: activeRoute as any,
+      currentRouteIndex: idx,
+      isWorking: !!trackingState.isWorking,
+      workStartTime: trackingState.workStartTime ?? null,
+
+      completedLocations: (completedLocations as any) ?? [],
+      currentLegStartTime: currentLegStartTime ?? null,
+      totalTravelMinutes: totalTravelMinutes ?? 0,
+      totalWorkMinutes: totalWorkMinutes ?? 0,
+      todayCompletedCount: todayCompletedCount ?? 0,
+    };
+  }, [
+    activeRoute,
+    activeRouteLen,
+    completedLocations,
+    currentLegStartTime,
+    currentRouteIndex,
+    currentUser?.id,
+    currentUser?.username,
+    isTrackingRoute,
+    todayCompletedCount,
+    totalTravelMinutes,
+    totalWorkMinutes,
+    trackingState.isWorking,
+    trackingState.workStartTime,
+    userLat,
+    userLng,
+  ]);
+
+  const flushFullTeamStatusToDb = useCallback(async (opts?: { force?: boolean }) => {
+    const payload = buildFullTeamStatusUpdate();
+    if (!payload) return;
+
+    const routeIds = Array.isArray((payload as any).activeRoute)
+      ? (payload as any).activeRoute.map((r: any) => String(r?.id ?? '')).join(',')
+      : '';
+    const hash = JSON.stringify({
+      routeIds,
+      currentRouteIndex: (payload as any).currentRouteIndex,
+      isWorking: (payload as any).isWorking,
+      workStartTime: (payload as any).workStartTime ? String((payload as any).workStartTime) : null,
+      completedCount: (payload as any).completedCount,
+      totalTravelMinutes: (payload as any).totalTravelMinutes,
+      totalWorkMinutes: (payload as any).totalWorkMinutes,
+      todayCompletedCount: (payload as any).todayCompletedCount,
+      currentLocationId: (payload as any).currentLocationId,
+    });
+
+    if (!opts?.force && lastFullTeamStatusHashRef.current === hash) return;
+    if (fullTeamStatusInFlightRef.current) return;
+    fullTeamStatusInFlightRef.current = true;
+
+    try {
+      const ok = await updateTeamStatus(payload as any);
+      if (ok) {
+        lastFullTeamStatusHashRef.current = hash;
+        try { clearPendingTeamStatusUpdate(); } catch { /* ignore */ }
+        return;
+      }
+    } catch {
+      // fall through to pending save
+    } finally {
+      fullTeamStatusInFlightRef.current = false;
+    }
+
+    // Could not persist now -> store pending so it can be retried later.
+    try {
+      savePendingTeamStatusUpdate({
+        version: 1,
+        userId: String(currentUser?.id ?? ''),
+        username: String(currentUser?.username ?? ''),
+        payload,
+        savedAt: new Date().toISOString(),
+      });
+    } catch {
+      // ignore
+    }
+  }, [buildFullTeamStatusUpdate, currentUser?.id, currentUser?.username]);
+
+  const flushPendingTeamStatusIfAny = useCallback(async () => {
+    const pending = loadPendingTeamStatusUpdate();
+    if (!pending) return;
+    if (!currentUser?.id || !currentUser?.username) return;
+    if (String(pending.userId) !== String(currentUser.id)) return;
+
+    try {
+      const ok = await updateTeamStatus((pending as any).payload);
+      if (ok) {
+        try { clearPendingTeamStatusUpdate(); } catch { /* ignore */ }
+        return;
+      }
+    } catch {
+      // ignore
+    }
+
+    // Keep pending, but mark last tried.
+    try {
+      savePendingTeamStatusUpdate({
+        ...pending,
+        lastTriedAt: new Date().toISOString(),
+      });
+    } catch {
+      // ignore
+    }
+  }, [currentUser?.id, currentUser?.username]);
+
+  // Try flushing any pending update when user logs in.
+  useEffect(() => {
+    flushPendingTeamStatusIfAny();
+  }, [flushPendingTeamStatusIfAny]);
+
+  // Periodic full sync (route + index + stats) so DB is always close to current.
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    if (!isTrackingRoute) return;
+    if (activeRouteLen === 0) return;
+
+    const id = window.setInterval(() => {
+      flushFullTeamStatusToDb();
+    }, 15000);
+
+    return () => window.clearInterval(id);
+  }, [activeRouteLen, currentUser?.id, flushFullTeamStatusToDb, isTrackingRoute]);
+
+  // Debounced sync on meaningful state changes (index/work/completions).
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    if (!isTrackingRoute) return;
+    if (activeRouteLen === 0) return;
+
+    const t = window.setTimeout(() => {
+      flushFullTeamStatusToDb();
+    }, 1200);
+
+    return () => window.clearTimeout(t);
+  }, [
+    activeRouteLen,
+    completedLocations?.length,
+    currentLegStartTime,
+    currentRouteIndex,
+    currentUser?.id,
+    flushFullTeamStatusToDb,
+    isTrackingRoute,
+    todayCompletedCount,
+    totalTravelMinutes,
+    totalWorkMinutes,
+    trackingState.isWorking,
+    trackingState.workStartTime,
+  ]);
+
+  // Flush on backgrounding / leaving and retry when back online.
+  useEffect(() => {
+    const onOnline = () => {
+      flushPendingTeamStatusIfAny();
+      flushFullTeamStatusToDb({ force: true });
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        // best-effort; don't await
+        flushFullTeamStatusToDb({ force: true });
+      }
+    };
+
+    const onPageHide = () => {
+      flushFullTeamStatusToDb({ force: true });
+    };
+
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+
+    return () => {
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [flushFullTeamStatusToDb, flushPendingTeamStatusIfAny]);
+
   // Tracking state is managed silently; local snapshot is saved to support resume
 
   // Uygulama açılışında (sadece native'de) tek seferlik konum izni iste
@@ -629,7 +901,7 @@ function App() {
     } catch {
       // Beklenmeyen hata olursa yoksay
     }
-  }, []);
+  }, [pushUserLocation]);
 
   // Get user's current location for distance calculations
   // Initial position on mount, then keep updating while route is active.
@@ -721,45 +993,40 @@ function App() {
     };
   }, [activeRoute, geoPermissionDenied, pushUserLocation]);
 
-  // load activities from supabase on mount (admins will see them)
+  // Ensure native status bar does not overlay the WebView on Android/iOS
   useEffect(() => {
-    // Ensure native status bar does not overlay the WebView on Android/iOS
     try {
       if ((Capacitor as any).getPlatform && (Capacitor as any).getPlatform() !== 'web') {
         StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
       }
-    } catch (e) {
+    } catch {
       // ignore if plugin not available in web/dev
     }
-    const load = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('activities')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(200);
-        if (error) {
-          console.warn('Could not load activities', error);
-          return;
-        }
-        const mapped = (data || []).map((r: any) => ({ 
-          id: r.id, 
-          user: r.username, 
-          action: r.action, 
-          time: r.created_at,
-          location_id: r.location_id,
-          location_name: r.location_name,
-          activity_type: r.activity_type,
-          duration_minutes: r.duration_minutes
-        }));
-        setActivities(mapped as ActivityEntry[]);
-        if (mapped.length > 0) setLastUpdated(mapped[0].time);
-      } catch (e) {
-        console.warn('load activities error', e);
-      }
-    };
-    load();
   }, []);
+
+  // Bootstrap activities after auth is available.
+  // Important: fetching only "on mount" fails on first login because auth token isn't set yet.
+  const bootstrapActivities = useCallback(async () => {
+    setActivitiesBootstrapState('loading');
+    setActivitiesBootstrapError(null);
+    try {
+      await refreshActivities();
+      setActivitiesBootstrapState('ready');
+    } catch (e) {
+      console.warn('load activities error', e);
+      setActivitiesBootstrapState('error');
+      setActivitiesBootstrapError('Aktivite geçmişi yüklenemedi. İnternet bağlantısını kontrol edip tekrar deneyin.');
+    }
+  }, [refreshActivities]);
+
+  useEffect(() => {
+    if (!currentUser?.id || userRole !== 'admin') {
+      setActivitiesBootstrapState('idle');
+      setActivitiesBootstrapError(null);
+      return;
+    }
+    bootstrapActivities();
+  }, [bootstrapActivities, currentUser?.id, userRole]);
 
   // Request notification permission on mount (silent, no logs)
   useEffect(() => {
@@ -836,36 +1103,47 @@ function App() {
 
     let cancelled = false;
 
-    refreshPendingAcceptanceCount();
+    const refreshList = async () => {
+      try {
+        const list = await listPendingAcceptanceRequests();
+        if (cancelled) return;
+        setPendingAcceptanceCount(Array.isArray(list) ? list.length : 0);
 
-    const channel = supabase
-      .channel('location_acceptance_requests_admin')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'location_acceptance_requests' },
-        (payload: any) => {
-          try {
-            const eventType = String(payload?.eventType || '').toUpperCase();
-            if (import.meta.env.DEV) console.debug('[acceptance badge] realtime', { eventType, payload });
-            if (eventType === 'INSERT') {
-              const row = payload?.new;
-              if (row && String(row.status || 'pending') === 'pending') {
-                notifyAcceptanceRequest(String(row.location_name || 'Lokasyon'), String(row.requested_by_username || 'Editör'));
-              }
-            }
-          } catch (e) {
-            console.warn('acceptance realtime handler error', e);
+        const prev = knownPendingAcceptanceIdsRef.current;
+        const nextIds = new Set<number>();
+
+        for (const r of list) {
+          const id = Number((r as any)?.id);
+          if (!Number.isFinite(id)) continue;
+          nextIds.add(id);
+
+          if (!prev.has(id)) {
+            notifyAcceptanceRequest(
+              String((r as any)?.locationName || 'Lokasyon'),
+              String((r as any)?.requestedByUsername || 'Editör')
+            );
           }
-
-          // Always refresh count; it's fast and keeps badge correct.
-          if (!cancelled) refreshPendingAcceptanceCount();
         }
-      )
-      .subscribe();
+
+        knownPendingAcceptanceIdsRef.current = nextIds;
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('refresh pending acceptance list failed', e);
+          setPendingAcceptanceCount(0);
+        }
+      }
+    };
+
+    refreshList();
+
+    // Polling replacement for realtime updates.
+    const id = window.setInterval(() => {
+      refreshList();
+    }, 10_000);
 
     return () => {
       cancelled = true;
-      try { supabase.removeChannel(channel); } catch { /* ignore */ }
+      window.clearInterval(id);
     };
   }, [currentUser, refreshPendingAcceptanceCount, userRole]);
 
@@ -942,15 +1220,15 @@ function App() {
     }
   }, [showMobileHeader]);
 
-  // Restore session from localStorage so refresh/geri butonunda login kalır
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-
   useEffect(() => {
     const restoreSession = async () => {
       try {
-        const raw = localStorage.getItem('app_session_v1');
+        const raw = sessionStorage.getItem('app_session_v1');
         if (raw) {
           const parsed = JSON.parse(raw);
+          if (parsed?.token) {
+            setAuthToken(String(parsed.token));
+          }
           if (parsed?.user && parsed?.role) {
             setCurrentUser(parsed.user);
             setUserRole(parsed.role);
@@ -960,7 +1238,7 @@ function App() {
             // So we don't update team status here to avoid overwriting existing route data
           }
         }
-      } catch (_e) {
+      } catch {
         // ignore
       } finally {
         setIsAuthChecking(false);
@@ -978,13 +1256,9 @@ function App() {
 
     const fetchLatestUser = async (notifyOnChange: boolean) => {
       try {
-        const { data, error } = await supabase
-          .from('app_users')
-          .select('id, username, role, full_name, email, can_view, can_edit, can_create, can_delete, can_export, can_route, can_team_view, can_manual_gps')
-          .eq('id', currentUser.id)
-          .maybeSingle();
-
-        if (isCancelled || error || !data) {
+        const me = await fetchMe();
+        const data = me?.user as any;
+        if (isCancelled || !data) {
           return;
         }
 
@@ -1024,8 +1298,10 @@ function App() {
         setCurrentUser(nextUser);
         setUserRole(role);
         try {
-          localStorage.setItem('app_session_v1', JSON.stringify({ user: nextUser, role }));
-        } catch (_e) {
+          const raw = sessionStorage.getItem('app_session_v1');
+          const existing = raw ? JSON.parse(raw) : {};
+          sessionStorage.setItem('app_session_v1', JSON.stringify({ ...existing, user: nextUser, role }));
+        } catch {
           // ignore
         }
 
@@ -1061,49 +1337,20 @@ function App() {
   const [isLiveMapOpen, setIsLiveMapOpen] = useState(false);
   // Live-follow a team member on the in-app map (2s refresh)
   const [followMember, setFollowMember] = useState<{ id: string; username: string; lat: number; lng: number } | null>(null);
-  const [teamLiveLocations, setTeamLiveLocations] = useState<Array<{ id: string; username: string; lat: number; lng: number }>>([]);
 
   // Keep a small ref so we don't spam updates with identical coords
   const lastTeamLocWriteRef = useRef<{ lat: number; lng: number } | null>(null);
 
+  // Poll follow member location when following someone on main map
   useEffect(() => {
-    if (!isLiveMapOpen && !followMember?.id) return;
+    if (!followMember?.id) return;
 
     let cancelled = false;
     const poll = async () => {
       try {
-        const { data, error } = await supabase
-          .from('team_status')
-          .select('user_id,username,current_lat,current_lng,last_updated_at,status')
-          .order('last_updated_at', { ascending: false });
+        const res = await apiFetch('/team-status');
         if (cancelled) return;
-        if (error) return;
-
-        const rows = Array.isArray(data) ? data : [];
-        const mapped = rows
-          .filter((r: any) => r?.current_lat != null && r?.current_lng != null)
-          .map((r: any) => ({
-            id: String(r.user_id),
-            username: String(r.username ?? ''),
-            lat: Number(r.current_lat),
-            lng: Number(r.current_lng)
-          }))
-          // Stable ordering to avoid re-render churn from row ordering changes
-          .sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)));
-
-        setTeamLiveLocations(prev => {
-          if (!prev || prev.length !== mapped.length) return mapped;
-          for (let i = 0; i < mapped.length; i++) {
-            const p = prev[i];
-            const n = mapped[i];
-            if (!p || !n) return mapped;
-            if (p.id !== n.id) return mapped;
-            if (p.lat !== n.lat || p.lng !== n.lng) return mapped;
-            // username changes are not critical for map stability; still update if changed
-            if (p.username !== n.username) return mapped;
-          }
-          return prev;
-        });
+        const rows = Array.isArray((res as any)?.data) ? (res as any).data : [];
 
         if (followMember?.id) {
           const found = rows.find((r: any) => String(r.user_id) === followMember.id);
@@ -1129,22 +1376,22 @@ function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [isLiveMapOpen, followMember?.id]);
+  }, [followMember?.id]);
 
   // While a route is active, write the current GPS point into `team_status` frequently
   // so others can see smooth movement on the live map.
   useEffect(() => {
     if (!currentUser?.id || !currentUser?.username) return;
-    if (!activeRoute || activeRoute.length === 0) return;
-    if (!userLocation) return;
+    if (activeRouteLen === 0) return;
+    if (userLat == null || userLng == null) return;
 
     let cancelled = false;
     const tick = async () => {
       if (cancelled) return;
-      if (!userLocation) return;
+      if (userLat == null || userLng == null) return;
 
-      const lat = userLocation[0];
-      const lng = userLocation[1];
+      const lat = userLat;
+      const lng = userLng;
 
       const prev = lastTeamLocWriteRef.current;
       if (prev && prev.lat === lat && prev.lng === lng) return;
@@ -1155,16 +1402,13 @@ function App() {
       const derivedStatus = trackingState.isWorking ? 'adreste' : 'yolda';
 
       try {
-        await supabase
-          .from('team_status')
-          .update({
-            username: currentUser.username,
-            status: derivedStatus,
-            current_lat: lat,
-            current_lng: lng,
-            last_updated_at: new Date().toISOString()
-          })
-          .eq('user_id', currentUser.id);
+        await updateTeamStatus({
+          userId: String(currentUser.id),
+          username: String(currentUser.username),
+          status: derivedStatus as any,
+          currentLat: lat,
+          currentLng: lng,
+        });
       } catch {
         // ignore
       }
@@ -1177,14 +1421,13 @@ function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     currentUser?.id,
     currentUser?.username,
-    activeRoute,
+    activeRouteLen,
     trackingState.isWorking,
-    userLocation?.[0],
-    userLocation?.[1]
+    userLat,
+    userLng
   ]);
 
   const currentRegion = locations.find(r => r.id === selectedRegion);
@@ -1360,28 +1603,40 @@ function App() {
     }
   };
 
-  const formatLastUpdatedDisplay = (iso: string | null) => {
-    if (!iso) return '—';
-    try {
-      const d = new Date(iso);
-      return d.toLocaleString();
-    } catch (e) {
-      return iso;
-    }
-  };
-
   const pushActivity = async (user: string, action: string) => {
     const time = new Date().toISOString();
+    
+    // Determine activity_type based on action content
+    const actionLower = action.toLowerCase();
+    let detectedType: 'general' | 'login' | 'logout' | 'update' | 'create' | 'delete' | 'location' = 'general';
+    if (actionLower.includes('giriş') || actionLower.includes('login')) {
+      detectedType = 'login';
+    } else if (actionLower.includes('çıkış') || actionLower.includes('logout')) {
+      detectedType = 'logout';
+    } else if (actionLower.includes('güncelle') || actionLower.includes('update')) {
+      detectedType = 'update';
+    } else if (actionLower.includes('oluştur') || actionLower.includes('create')) {
+      detectedType = 'create';
+    } else if (actionLower.includes('silindi') || actionLower.includes('delete')) {
+      detectedType = 'delete';
+    } else if (actionLower.includes('rota') || actionLower.includes('route') || actionLower.includes('konum') || actionLower.includes('varış') || actionLower.includes('tamamla')) {
+      detectedType = 'location';
+    }
+    
     try {
-      const { data, error } = await supabase.from('activities').insert([{ username: user, action, created_at: time }]).select();
-      if (error) {
-        console.warn('Could not insert activity', error);
-        return;
-      }
-      const inserted = data && data[0];
-      const entry: ActivityEntry = { id: inserted?.id ?? crypto.randomUUID(), user, action, time: inserted?.created_at ?? time };
-      const next = [entry, ...activities].slice(0, 200);
-      setActivities(next);
+      const inserted = await logActivity({ username: user, action, activity_type: detectedType });
+      const entry: ActivityEntry = {
+        id: String((inserted as any)?.id ?? crypto.randomUUID()),
+        user,
+        action,
+        time: String((inserted as any)?.created_at ?? time),
+        location_id: (inserted as any)?.location_id ? String((inserted as any).location_id) : undefined,
+        location_name: (inserted as any)?.location_name ? String((inserted as any).location_name) : undefined,
+        activity_type: (inserted as any)?.activity_type ? String((inserted as any).activity_type) as any : detectedType,
+        duration_minutes: (inserted as any)?.duration_minutes != null ? Number((inserted as any).duration_minutes) : undefined,
+      };
+      // Use functional update to avoid clobbering a concurrently refreshed activities list.
+      setActivities((prev) => [entry, ...(prev || [])].slice(0, 200));
       setLastUpdated(entry.time);
     } catch (e) {
       console.warn('pushActivity error', e);
@@ -1413,7 +1668,7 @@ function App() {
   };
 
   // Handle arrival confirmation
-  const handleArrivalConfirm = async () => {
+  const handleArrivalConfirm = useCallback(async () => {
     if (!currentUser || !currentTargetLocation) return;
     
     const arrivalTime = new Date();
@@ -1443,8 +1698,8 @@ function App() {
         nextLocationName: nextLoc?.name ?? null,
         totalRouteCount: activeRoute.length,
         completedCount: currentRouteIndex,
-        currentLat: userLocation?.[0] ?? null,
-        currentLng: userLocation?.[1] ?? null,
+        currentLat: userLat,
+        currentLng: userLng,
         activeRoute: activeRoute,
         currentRouteIndex: currentRouteIndex,
         isWorking: true,
@@ -1464,27 +1719,24 @@ function App() {
     );
 
     // Refresh activities
-    const { data } = await supabase
-      .from('activities')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(200);
-    
-    if (data) {
-      const mapped = data.map((r: any) => ({
-        id: r.id,
-        user: r.username,
-        action: r.action,
-        time: r.created_at,
-        location_id: r.location_id,
-        location_name: r.location_name,
-        activity_type: r.activity_type,
-        duration_minutes: r.duration_minutes
-      }));
-      setActivities(mapped as ActivityEntry[]);
-      if (mapped.length > 0) setLastUpdated(mapped[0].time);
+    try {
+      await refreshActivities();
+    } catch {
+      // ignore
     }
-  };
+  }, [
+    activeRoute,
+    completedLocations,
+    confirmArrival,
+    currentLegStartTime,
+    currentRouteIndex,
+    currentTargetLocation,
+    currentUser,
+    refreshActivities,
+    totalTravelMinutes,
+    userLat,
+    userLng,
+  ]);
 
   // Route test mode: once we are "near" (simulated), auto-confirm arrival.
   useEffect(() => {
@@ -1507,7 +1759,8 @@ function App() {
     isTrackingRoute,
     currentTargetLocation,
     trackingState.isNearby,
-    trackingState.isWorking
+    trackingState.isWorking,
+    handleArrivalConfirm
   ]);
 
   // Handle completion confirmation
@@ -1682,25 +1935,10 @@ function App() {
     }
 
     // Refresh activities
-    const { data } = await supabase
-      .from('activities')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(200);
-    
-    if (data) {
-      const mapped = data.map((r: any) => ({
-        id: r.id,
-        user: r.username,
-        action: r.action,
-        time: r.created_at,
-        location_id: r.location_id,
-        location_name: r.location_name,
-        activity_type: r.activity_type,
-        duration_minutes: r.duration_minutes
-      }));
-      setActivities(mapped as ActivityEntry[]);
-      if (mapped.length > 0) setLastUpdated(mapped[0].time);
+    try {
+      await refreshActivities();
+    } catch {
+      // ignore
     }
   };
 
@@ -1999,11 +2237,11 @@ function App() {
       try {
         setDetailsModalLocation(found);
         setIsDetailsModalOpen(true);
-      } catch (e) {
+      } catch {
         // ignore if modal state isn't available
       }
       // close drawer if open (mobile)
-      try { setDrawerOpen(false); } catch (_e) { /* ignore */ }
+      try { setDrawerOpen(false); } catch { /* ignore */ }
     } else {
       console.warn('Could not find location for activity click:', name);
     }
@@ -2046,7 +2284,27 @@ function App() {
     return children;
   };
 
-  if (loading || isAuthChecking) {
+  const needsActivitiesBootstrap = !!currentUser && userRole === 'admin' && activitiesBootstrapState !== 'ready';
+
+  if (needsActivitiesBootstrap && activitiesBootstrapState === 'error') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="text-center max-w-md px-6">
+          <div className="text-red-500 mb-4 text-2xl">⚠️</div>
+          <p className="text-red-600 mb-4">{activitiesBootstrapError || 'Aktivite geçmişi yüklenemedi.'}</p>
+          <button
+            type="button"
+            onClick={() => bootstrapActivities()}
+            className="px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
+          >
+            Tekrar Dene
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading || isAuthChecking || needsActivitiesBootstrap) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
         <div className="text-center">
@@ -2075,15 +2333,24 @@ function App() {
     <>
       <VersionChecker />
       <Routes>
-        <Route path="/login" element={<LoginPage onLogin={async (user) => {
+        <Route path="/login" element={<LoginPage onLogin={async (user, token) => {
         // Accept 'admin', 'editor', 'viewer' (case-insensitive) or default to 'user'
         const r = String(user.role || '').toLowerCase();
         const role = r === 'admin' ? 'admin' : (r === 'editor' ? 'editor' : (r === 'viewer' ? 'viewer' : 'user'));
+        // Ensure auth token is stored before any post-login API calls (activities, etc.)
+        try { if (token) setAuthToken(String(token)); } catch { /* ignore */ }
         setUserRole(role);
         setCurrentUser(user);
         // persist session
-        try { localStorage.setItem('app_session_v1', JSON.stringify({ user, role })); } catch (_e) { /* ignore */ }
+        try { sessionStorage.setItem('app_session_v1', JSON.stringify({ user, role, token: String(token || '') })); } catch { /* ignore */ }
         pushActivity(user.username, 'Giriş yaptı');
+
+        // Explicitly bootstrap activities after login.
+        // This covers the case where the user logs in again as the same user (currentUser.id unchanged)
+        // and the effect that depends on `currentUser?.id` would not re-run.
+        if (role === 'admin') {
+          try { bootstrapActivities(); } catch { /* ignore */ }
+        }
         
         // For editor users, route restoration happens automatically via useEffect on currentUser change
         // We don't set idle status here to avoid overwriting any existing active route
@@ -2093,21 +2360,26 @@ function App() {
           <div
             className={
               `${showMobileHeader ? 'min-h-screen flex flex-col' : 'h-screen flex overflow-hidden'} ` +
-              'bg-gradient-to-br from-blue-50 to-indigo-100'
+              'bg-gray-50'
             }
           >
             {/* Desktop: left sidebar navigation (text-only). Mobile: keep compact top header + drawer. */}
             {!showMobileHeader && desktopSidebarOpen && (
-              <aside className="w-80 shrink-0 bg-white/90 backdrop-blur-md border-r border-gray-100 shadow-sm sticky top-0 h-full">
-                <div className="h-full flex flex-col p-4 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <div className="text-base font-semibold text-gray-800">MapFlow</div>
+              <aside className="w-80 shrink-0 bg-white border-r border-gray-200 shadow-sm sticky top-0 h-full">
+                <div className="h-full flex flex-col min-w-0">
+                  {/* Logo Area - Fixed */}
+                  <div className="shrink-0 flex items-center gap-3 p-4 pb-3 border-b border-gray-200">
+                    <div className="w-10 h-10 rounded-lg bg-blue-600 p-0.5 shadow-sm">
+                      <img src="/cartiva.png" alt="Cartiva" className="w-full h-full rounded-md object-cover" />
+                    </div>
+                    <div>
+                      <span className="text-lg font-bold text-gray-800 tracking-tight">Cartiva</span>
+                      <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">Saha Yönetim</div>
+                    </div>
                   </div>
 
-                  <div className="h-6" />
-
-                  {/* Middle area (no scroll): keep content compact to fit 100vh */}
-                  <div className="flex-1 min-w-0">
+                  {/* Scrollable Middle area */}
+                  <div className="flex-1 overflow-y-auto p-4 pt-3 min-w-0">
                     {userCanView && (
                       <div className="min-w-0">
                         <div className="text-xs font-medium text-gray-500 mb-2">Bölge Seçimi</div>
@@ -2119,32 +2391,32 @@ function App() {
                     )}
 
                     {userRole === 'admin' && (
-                      <div className="mt-4">
+                      <div className="mt-3">
                         <button
                           type="button"
                           onClick={() => setActivityFullscreenOpen(true)}
-                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm font-semibold text-gray-800 hover:bg-gray-50 transition-colors"
+                          className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                         >
                           <span>Aktivite Geçmişi</span>
-                          <span className="text-xs font-medium text-gray-500">Aç</span>
+                          <span className="text-xs font-medium text-gray-400">Aç</span>
                         </button>
                       </div>
                     )}
 
-                    <div className="mt-4">
-                      <div className="text-xs font-medium text-gray-500 mb-2">Görünüm</div>
+                    <div className="mt-3">
+                      <div className="text-xs font-medium text-gray-500 mb-1.5">Görünüm</div>
                       <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
                         onClick={() => setView('map')}
-                        className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${view === 'map' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                        className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${view === 'map' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
                       >
                         Harita
                       </button>
                       <button
                         type="button"
                         onClick={() => setView('list')}
-                        className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${view === 'list' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                        className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${view === 'list' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
                       >
                         Liste
                       </button>
@@ -2152,16 +2424,16 @@ function App() {
                     </div>
 
                     {canUseMessages && (
-                      <div className="mt-4">
-                        <div className="text-xs font-medium text-gray-500 mb-2">Mesajlar</div>
+                      <div className="mt-3">
+                        <div className="text-xs font-medium text-gray-500 mb-1.5">Mesajlar</div>
                         <button
                           type="button"
                           onClick={() => setIsMessagesOpen(true)}
-                          className="relative w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          className="relative w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                         >
                           Mesajlar
                           {unreadMessagesCount > 0 && (
-                            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
                               {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
                             </span>
                           )}
@@ -2170,20 +2442,20 @@ function App() {
                     )}
 
                     {view === 'map' && userCanView && (
-                      <div className="mt-4">
-                        <div className="text-xs font-medium text-gray-500 mb-2">Harita Modu</div>
+                      <div className="mt-3">
+                        <div className="text-xs font-medium text-gray-500 mb-1.5">Harita Modu</div>
                         <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={() => setMapMode('lokasyon')}
-                          className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${mapMode === 'lokasyon' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                          className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${mapMode === 'lokasyon' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
                         >
                           Lokasyon modu
                         </button>
                         <button
                           type="button"
                           onClick={() => setMapMode('harita')}
-                          className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${mapMode === 'harita' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                          className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${mapMode === 'harita' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
                         >
                           Harita modu
                         </button>
@@ -2192,20 +2464,20 @@ function App() {
                     )}
 
                     {userCanExport && (
-                      <div className="mt-4">
-                        <div className="text-xs font-medium text-gray-500 mb-2">Dışa Aktar</div>
+                      <div className="mt-3">
+                        <div className="text-xs font-medium text-gray-500 mb-1.5">Dışa Aktar</div>
                         <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={handleExportExcel}
-                          className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                         >
                           Excel'e Aktar
                         </button>
                         <button
                           type="button"
                           onClick={handleExportPDF}
-                          className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                         >
                           PDF'e Aktar
                         </button>
@@ -2214,14 +2486,14 @@ function App() {
                     )}
 
                     {(userCanCreate || userCanRoute || userCanTeamView || userRole === 'admin') && (
-                      <div className="mt-4">
-                        <div className="text-xs font-medium text-gray-500 mb-2">Yönetim</div>
-                        <div className="grid grid-cols-2 gap-2">
+                      <div className="mt-3">
+                        <div className="text-xs font-medium text-gray-500 mb-1.5">Yönetim</div>
+                        <div className="grid grid-cols-2 gap-1.5">
                         {canViewLiveMap && (
                           <button
                             type="button"
                             onClick={() => setIsLiveMapOpen(true)}
-                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                           >
                             Canlı Harita
                           </button>
@@ -2269,7 +2541,7 @@ function App() {
                               setIsCreateMode(true);
                               setIsEditModalOpen(true);
                             }}
-                              className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors"
+                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors"
                           >
                             Yeni Lokasyon
                           </button>
@@ -2278,7 +2550,7 @@ function App() {
                           <button
                             type="button"
                             onClick={() => setIsRouteModalOpen(true)}
-                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 transition-colors"
+                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
                           >
                             Rota Oluştur
                           </button>
@@ -2287,7 +2559,7 @@ function App() {
                           <button
                             type="button"
                             onClick={() => setIsTasksPanelOpen(true)}
-                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                           >
                             Görevler
                           </button>
@@ -2296,7 +2568,7 @@ function App() {
                           <button
                             type="button"
                             onClick={() => setIsTeamPanelOpen(true)}
-                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                           >
                             Ekip Durumu
                           </button>
@@ -2305,7 +2577,7 @@ function App() {
                           <button
                             type="button"
                             onClick={() => setIsMesaiTrackingOpen(true)}
-                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                           >
                             Mesai Takip
                           </button>
@@ -2314,11 +2586,11 @@ function App() {
                           <button
                             type="button"
                             onClick={() => setIsAcceptanceApprovalsOpen(true)}
-                            className="relative w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="relative w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                           >
                             Kabul Onayları
                             {pendingAcceptanceCount > 0 && (
-                              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
                                 {pendingAcceptanceCount > 99 ? '99+' : pendingAcceptanceCount}
                               </span>
                             )}
@@ -2328,7 +2600,7 @@ function App() {
                           <button
                             type="button"
                             onClick={() => setIsAssignedTasksAdminOpen(true)}
-                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                           >
                             Atanan Görevler
                           </button>
@@ -2337,7 +2609,7 @@ function App() {
                           <button
                             type="button"
                             onClick={() => setIsAdminPanelOpen(true)}
-                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-red-200 bg-red-50 text-red-800 hover:bg-red-100 transition-colors"
+                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
                           >
                             Admin Paneli
                           </button>
@@ -2347,14 +2619,15 @@ function App() {
                     )}
                   </div>
 
-                  <div className="mt-auto pt-3 border-t border-gray-100">
+                  {/* User + Logout - Fixed at bottom */}
+                  <div className="shrink-0 p-4 pt-3 border-t border-gray-200 bg-gray-50">
                     <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-white">
+                      <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
                         {(currentUser?.username ?? 'U').charAt(0).toUpperCase()}
                       </div>
                       <div className="min-w-0">
                         <div className="text-sm font-semibold text-gray-800 truncate">{currentUser?.username ?? ''}</div>
-                        <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                        <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
                           {userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}
                         </div>
                       </div>
@@ -2367,12 +2640,12 @@ function App() {
                           catch (e) { console.warn('pushActivity failed on logout', e); }
                         }
                         try { clearTrackingState(); } catch { /* ignore */ }
-                        try { localStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
+                        try { sessionStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
                         setUserRole(null);
                         setCurrentUser(null);
                         goToLogin(true);
                       }}
-                      className="mt-3 w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-red-600 hover:bg-red-50 transition-colors"
+                      className="mt-3 w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                     >
                       Çıkış Yap
                     </button>
@@ -2383,13 +2656,13 @@ function App() {
 
             {/* Fullscreen Activity History (admin) */}
             {userRole === 'admin' && activityFullscreenOpen && (
-              <div className="fixed inset-0 z-[1400] bg-white">
-                <div className="h-14 border-b border-gray-100 bg-white/90 backdrop-blur-md flex items-center justify-between px-4">
-                  <div className="text-sm font-semibold text-gray-900">Aktivite Geçmişi</div>
+              <div className="fixed inset-0 z-[1400] bg-gray-50">
+                <div className="h-14 border-b border-gray-200 bg-white flex items-center justify-between px-4">
+                  <div className="text-sm font-semibold text-gray-800">Aktivite Geçmişi</div>
                   <button
                     type="button"
                     onClick={() => setActivityFullscreenOpen(false)}
-                    className="px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                    className="px-3 py-1.5 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                   >
                     Kapat
                   </button>
@@ -2419,32 +2692,32 @@ function App() {
                   onClick={() => setDesktopSidebarOpen(v => !v)}
                   className={
                     desktopSidebarOpen
-                      ? "fixed top-1/2 left-[calc(theme(spacing.80)-0rem)] z-[1200] -translate-y-1/2 w-9 h-14 rounded-l-none rounded-r-2xl bg-white/95 backdrop-blur-md border border-l-0 border-gray-200 shadow-lg hover:bg-white transition-colors flex items-center justify-center"
-                      : "fixed top-1/2 left-0 z-[1200] -translate-y-1/2 w-9 h-14 rounded-l-none rounded-r-2xl bg-white/95 backdrop-blur-md border border-l-0 border-gray-200 shadow-lg hover:bg-white transition-colors flex items-center justify-center"
+                      ? "fixed top-1/2 left-[calc(theme(spacing.80)-0rem)] z-[1200] -translate-y-1/2 w-9 h-14 rounded-l-none rounded-r-2xl bg-white border border-l-0 border-gray-200 shadow-sm hover:bg-gray-50 transition-colors flex items-center justify-center"
+                      : "fixed top-1/2 left-0 z-[1200] -translate-y-1/2 w-9 h-14 rounded-l-none rounded-r-2xl bg-white border border-l-0 border-gray-200 shadow-sm hover:bg-gray-50 transition-colors flex items-center justify-center"
                   }
                   title={desktopSidebarOpen ? 'Menüyü Kapat' : 'Menüyü Aç'}
                   aria-label={desktopSidebarOpen ? 'Menüyü Kapat' : 'Menüyü Aç'}
                 >
                   {desktopSidebarOpen ? (
-                    <svg className="w-5 h-5 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-5 h-5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M15 18l-6-6 6-6" />
                     </svg>
                   ) : (
-                    <svg className="w-5 h-5 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-5 h-5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M9 18l6-6-6-6" />
                     </svg>
                   )}
                 </button>
               )}
               {showMobileHeader && (
-                <header className="fixed inset-x-0 top-0 z-[1000] bg-white/90 backdrop-blur-md border-b border-gray-100 shadow-sm transition-all duration-300" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+                <header className="fixed inset-x-0 top-0 z-[1000] bg-white border-b border-gray-200 shadow-sm transition-all duration-300" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
                   <div className="w-full px-4 sm:px-6 lg:px-8">
                     <div className="flex items-center justify-between h-16 sm:h-20">
                       <div className="flex items-center gap-4 shrink-0">
                         <div className="flex items-center mr-2">
                           <button
                             onClick={() => setDrawerOpen(true)}
-                            className="inline-flex items-center justify-center p-2 rounded-xl bg-gray-50 text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                            className="inline-flex items-center justify-center p-2 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-300"
                             aria-label="Menü"
                             title="Menü"
                           >
@@ -2457,24 +2730,28 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="flex-1 flex justify-center items-center gap-4 px-4 sm:px-8">
+                      <div className="flex-1 flex justify-center items-center min-w-0 px-2 sm:px-4">
                         {userCanView ? (
-                          <div className="w-full max-w-xl transform transition-all duration-200 hover:scale-[1.01]">
+                          <div className="w-full max-w-md min-w-0">
                             <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} dropdownOffsetClass="mt-12" />
                           </div>
                         ) : (
-                          <div className="text-sm sm:text-base font-semibold text-gray-800">MapFlow</div>
+                          <div className="text-sm sm:text-base font-semibold text-gray-800">Cartiva</div>
                         )}
                       </div>
 
                       {canViewLiveMap && (
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center shrink-0">
                           <button
                             onClick={() => setIsLiveMapOpen(true)}
-                            className="px-3 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 shadow-sm hover:shadow-md transition-all duration-200 text-sm font-semibold"
+                            className="px-2 sm:px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm transition-all duration-200 text-xs sm:text-sm font-medium whitespace-nowrap"
                             title="Canlı Harita"
                           >
-                            Canlı Harita
+                            <span className="hidden sm:inline">Canlı Harita</span>
+                            <svg className="w-5 h-5 sm:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <circle cx="12" cy="10" r="3"/>
+                              <path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8Z"/>
+                            </svg>
                           </button>
                         </div>
                       )}
@@ -2483,7 +2760,7 @@ function App() {
 
                   {/* Mini sub-header: Weather (separate row under the main header) */}
                   {userCanView && (
-                    <div className="border-t border-gray-100 bg-white/90 backdrop-blur-md">
+                    <div className="border-t border-gray-200 bg-white">
                       <div className="w-full px-4 sm:px-6 lg:px-8">
                         <div className="h-10 flex items-center justify-center">
                           <WeatherWidget selectedRegion={selectedRegion} regions={locations} variant="inline" />
@@ -2502,40 +2779,38 @@ function App() {
                   onClick={() => setDrawerOpen(false)}
                   aria-hidden
                 />
-                <aside className="fixed top-0 left-0 z-[1110] h-full w-72 bg-white shadow-2xl p-4 overflow-auto">
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex-1">
-                      {/* Mobile drawer: show last-updated and recent activities for quick access */}
-                      {userRole === 'admin' ? (
-                          <div className="mb-2">
-                            <div className="text-xs text-gray-600">Son güncelleme</div>
-                            <div className="text-sm font-medium text-gray-800">{formatLastUpdatedDisplay(lastUpdated)}</div>
-                          </div>
-                        ) : (
-                          <div className="mb-2">
-                            <div className="text-sm font-medium">Hızlı Menü</div>
-                          </div>
-                        )}
+                <aside className="fixed top-0 left-0 z-[1110] h-full w-72 bg-white shadow-xl flex flex-col">
+                  {/* Logo Header - Fixed */}
+                  <div className="shrink-0 flex items-center justify-between p-4 pb-3 border-b border-gray-200">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-blue-600 p-0.5 shadow-sm">
+                        <img src="/cartiva.png" alt="Cartiva" className="w-full h-full rounded-md object-cover" />
+                      </div>
+                      <div>
+                        <span className="text-lg font-bold text-gray-800 tracking-tight">Cartiva</span>
+                        <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">Saha Yönetim</div>
+                      </div>
                     </div>
-                    <button onClick={() => setDrawerOpen(false)} className="p-1 rounded-md bg-gray-100">
-                      <svg className="w-5 h-5 text-gray-700" viewBox="0 0 20 20" fill="currentColor">
+                    <button onClick={() => setDrawerOpen(false)} className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors">
+                      <svg className="w-5 h-5 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 011.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
                       </svg>
                     </button>
                   </div>
 
-                  <div className="space-y-4">
+                  {/* Scrollable Content */}
+                  <div className="flex-1 overflow-y-auto p-4 pt-3 space-y-3">
                     {canUseMessages && (
                       <div>
-                        <div className="text-xs font-medium text-gray-500 mb-2">Mesajlar</div>
+                        <div className="text-xs font-medium text-gray-500 mb-1.5">Mesajlar</div>
                         <button
                           type="button"
                           onClick={() => { setIsMessagesOpen(true); setDrawerOpen(false); }}
-                          className="relative w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                          className="relative w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                         >
                           Mesajlar
                           {unreadMessagesCount > 0 && (
-                            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
                               {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
                             </span>
                           )}
@@ -2551,29 +2826,29 @@ function App() {
                             setActivityFullscreenOpen(true);
                             setDrawerOpen(false);
                           }}
-                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm font-semibold text-gray-800 hover:bg-gray-50 transition-colors"
+                          className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                         >
                           <span>Aktivite Geçmişi</span>
-                          <span className="text-xs font-medium text-gray-500">Aç</span>
+                          <span className="text-xs font-medium text-gray-400">Aç</span>
                         </button>
                       </div>
                     )}
 
                     {userCanExport && (
                       <div>
-                        <div className="text-xs font-medium text-gray-500 mb-2">Dışa Aktar</div>
+                        <div className="text-xs font-medium text-gray-500 mb-1.5">Dışa Aktar</div>
                         <div className="grid grid-cols-2 gap-2">
                           <button
                             type="button"
                             onClick={() => { handleExportExcel(); setDrawerOpen(false); }}
-                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                           >
                             Excel'e Aktar
                           </button>
                           <button
                             type="button"
                             onClick={() => { handleExportPDF(); setDrawerOpen(false); }}
-                            className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                           >
                             PDF'e Aktar
                           </button>
@@ -2582,63 +2857,38 @@ function App() {
                     )}
 
                     <div>
-                      <div className="text-xs font-medium text-gray-500 mb-2">Görünüm</div>
+                      <div className="text-xs font-medium text-gray-500 mb-1.5">Görünüm</div>
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={() => { setView('map'); setDrawerOpen(false); }}
-                          className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${view === 'map' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                          className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${view === 'map' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
                         >
                           Harita
                         </button>
                         <button
                           type="button"
                           onClick={() => { setView('list'); setDrawerOpen(false); }}
-                          className={`w-full px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${view === 'list' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                          className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${view === 'list' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
                         >
                           Liste
                         </button>
                       </div>
                     </div>
 
-                    <div>
-                      <div className="text-xs font-medium text-gray-500 mb-2">Hesap</div>
-                      {userRole ? (
-                        <>
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-white">{(currentUser?.username ?? 'U').charAt(0).toUpperCase()}</div>
-                            <div>
-                              <div className="text-sm font-semibold text-gray-800">{currentUser?.username}</div>
-                              <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">{userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}</div>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (currentUser) {
-                                try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
-                                catch (e) { console.warn('pushActivity failed on drawer logout', e); }
-                              }
-                              try { clearTrackingState(); } catch { /* ignore */ }
-                              try { localStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
-                              setUserRole(null);
-                              setCurrentUser(null);
-                              goToLogin(true);
-                            }}
-                            className="mt-3 w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-red-600 hover:bg-red-50 transition-colors"
-                          >
-                            Çıkış Yap
-                          </button>
-                        </>
-                      ) : (
-                        <button type="button" onClick={() => goToLogin(false)} className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors">Giriş</button>
-                      )}
-                    </div>
-
                     {(userCanCreate || userCanRoute || userCanTeamView || userRole === 'admin') && (
                       <div>
-                        <div className="text-xs font-medium text-gray-500 mb-2">Yönetim</div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="text-xs font-medium text-gray-500 mb-1.5">Yönetim</div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {canViewLiveMap && (
+                            <button
+                              type="button"
+                              onClick={() => { setIsLiveMapOpen(true); setDrawerOpen(false); }}
+                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                            >
+                              Canlı Harita
+                            </button>
+                          )}
                           {userCanCreate && (
                             <button
                               type="button"
@@ -2683,7 +2933,7 @@ function App() {
                                 setIsEditModalOpen(true);
                                 setDrawerOpen(false);
                               }}
-                              className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors"
+                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors"
                             >
                               Yeni Lokasyon
                             </button>
@@ -2693,82 +2943,111 @@ function App() {
                             <button
                               type="button"
                               onClick={() => { setIsRouteModalOpen(true); setDrawerOpen(false); }}
-                              className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 transition-colors"
+                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
                             >
                               Rota Oluştur
                             </button>
                           )}
-                        </div>
 
-                        {/* Tasks Panel Button - (mobile drawer) */}
-                        {currentUser && (userCanRoute || userRole === 'editor' || userRole === 'admin') && (
-                          <button
-                            type="button"
-                            onClick={() => { setIsTasksPanelOpen(true); setDrawerOpen(false); }}
-                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
-                          >
-                            Görevler
-                          </button>
-                        )}
+                          {currentUser && (userCanRoute || userRole === 'editor' || userRole === 'admin') && (
+                            <button
+                              type="button"
+                              onClick={() => { setIsTasksPanelOpen(true); setDrawerOpen(false); }}
+                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                            >
+                              Görevler
+                            </button>
+                          )}
                         
-                        {/* Team Panel Button - based on can_team_view (mobile drawer) */}
-                        {userCanTeamView && (
-                          <button
-                            type="button"
-                            onClick={() => { setIsTeamPanelOpen(true); setDrawerOpen(false); }}
-                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
-                          >
-                            Ekip Durumu
-                          </button>
-                        )}
+                          {userCanTeamView && (
+                            <button
+                              type="button"
+                              onClick={() => { setIsTeamPanelOpen(true); setDrawerOpen(false); }}
+                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                            >
+                              Ekip Durumu
+                            </button>
+                          )}
 
-                        {userRole === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={() => { setIsMesaiTrackingOpen(true); setDrawerOpen(false); }}
-                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
-                          >
-                            Mesai Takip
-                          </button>
-                        )}
+                          {userRole === 'admin' && (
+                            <button
+                              type="button"
+                              onClick={() => { setIsMesaiTrackingOpen(true); setDrawerOpen(false); }}
+                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                            >
+                              Mesai Takip
+                            </button>
+                          )}
 
-                        {/* Admin Panel Button - Admin only (mobile drawer) */}
-                        {userRole === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={() => { setIsAcceptanceApprovalsOpen(true); setDrawerOpen(false); }}
-                            className="relative w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
-                          >
-                            Kabul Onayları
-                            {pendingAcceptanceCount > 0 && (
-                              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
-                                {pendingAcceptanceCount > 99 ? '99+' : pendingAcceptanceCount}
-                              </span>
-                            )}
-                          </button>
-                        )}
+                          {userRole === 'admin' && (
+                            <button
+                              type="button"
+                              onClick={() => { setIsAcceptanceApprovalsOpen(true); setDrawerOpen(false); }}
+                              className="relative w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                            >
+                              Kabul Onayları
+                              {pendingAcceptanceCount > 0 && (
+                                <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+                                  {pendingAcceptanceCount > 99 ? '99+' : pendingAcceptanceCount}
+                                </span>
+                              )}
+                            </button>
+                          )}
 
-                        {userRole === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={() => { setIsAssignedTasksAdminOpen(true); setDrawerOpen(false); }}
-                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
-                          >
-                            Atanan Görevler
-                          </button>
-                        )}
+                          {userRole === 'admin' && (
+                            <button
+                              type="button"
+                              onClick={() => { setIsAssignedTasksAdminOpen(true); setDrawerOpen(false); }}
+                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                            >
+                              Atanan Görevler
+                            </button>
+                          )}
 
-                        {userRole === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={() => { setIsAdminPanelOpen(true); setDrawerOpen(false); }}
-                            className="w-full mt-2 px-3 py-2.5 rounded-lg text-sm font-semibold border border-red-200 bg-red-50 text-red-800 hover:bg-red-100 transition-colors"
-                          >
-                            Admin Paneli
-                          </button>
-                        )}
+                          {userRole === 'admin' && (
+                            <button
+                              type="button"
+                              onClick={() => { setIsAdminPanelOpen(true); setDrawerOpen(false); }}
+                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
+                            >
+                              Admin Paneli
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
+                  </div>
+
+                  {/* User + Logout - Fixed at bottom */}
+                  <div className="shrink-0 p-4 pt-3 border-t border-gray-200 bg-gray-50">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
+                        {(currentUser?.username ?? 'U').charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-gray-800 truncate">{currentUser?.username ?? ''}</div>
+                        <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+                          {userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (currentUser) {
+                          try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
+                          catch (e) { console.warn('pushActivity failed on drawer logout', e); }
+                        }
+                        try { clearTrackingState(); } catch { /* ignore */ }
+                        try { sessionStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
+                        setUserRole(null);
+                        setCurrentUser(null);
+                        goToLogin(true);
+                      }}
+                      className="mt-3 w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                    >
+                      Çıkış Yap
+                    </button>
                   </div>
                 </aside>
               </>
@@ -2789,14 +3068,14 @@ function App() {
                 view === 'map' ? (
                   <div className="space-y-4">
                     <div className="flex items-center justify-end">
-                      <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+                      <div className="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800 p-1 shadow-lg">
                         <button
                           type="button"
                           onClick={() => setMapMode('lokasyon')}
                           className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                             mapMode === 'lokasyon'
-                              ? 'bg-indigo-600 text-white'
-                              : 'text-gray-700 hover:bg-gray-100'
+                              ? 'bg-blue-600 text-white'
+                              : 'text-slate-300 hover:bg-slate-700'
                           }`}
                         >
                           Lokasyon modu
@@ -2806,8 +3085,8 @@ function App() {
                           onClick={() => setMapMode('harita')}
                           className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                             mapMode === 'harita'
-                              ? 'bg-indigo-600 text-white'
-                              : 'text-gray-700 hover:bg-gray-100'
+                              ? 'bg-blue-600 text-white'
+                              : 'text-slate-300 hover:bg-slate-700'
                           }`}
                         >
                           Harita modu
@@ -2816,7 +3095,7 @@ function App() {
                     </div>
 
                     <div
-                      className="bg-black rounded-t-lg shadow-md border border-gray-200 w-full overflow-hidden"
+                      className="bg-slate-900 rounded-t-lg shadow-xl border border-slate-700 w-full overflow-hidden"
                       style={{ minHeight: 'calc(var(--vh, 1vh) * 40)' }}
                     >
                       <div className="map-responsive w-full">
@@ -2882,7 +3161,7 @@ function App() {
                               <div className="h-full transition-all" style={{ width: `${acceptedPercent}%`, background: summaryColor }} />
                             </div>
 
-                            <div className="mt-2 text-sm text-slate-600">{acceptedCount} / {totalShown} lokasyon</div>
+                            <div className="mt-2 text-sm text-gray-600">{acceptedCount} / {totalShown} lokasyon</div>
 
                             <div className="mt-3 grid grid-cols-1 gap-2">
                               <div className="flex items-center gap-2">
@@ -3049,44 +3328,12 @@ function App() {
                 />
               )}
 
-              {/* Fullscreen Live Map Overlay */}
+              {/* Fullscreen Live Map Panel */}
               {isLiveMapOpen && canViewLiveMap && (
-                <div className="fixed inset-0 z-[1300] bg-black/30" role="dialog" aria-modal="true">
-                  <div className="absolute inset-0 bg-white" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-                    <div className="absolute inset-x-0 top-0 z-10 h-14 sm:h-16 bg-white/90 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-4">
-                      <div className="text-sm sm:text-base font-semibold text-gray-800">
-                        Canlı Harita
-                        {followMember?.username ? <span className="ml-2 text-gray-500 font-medium">({followMember.username})</span> : null}
-                      </div>
-                      <button
-                        onClick={() => setIsLiveMapOpen(false)}
-                        className="p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
-                        aria-label="Kapat"
-                        title="Kapat"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <div className="absolute inset-0 pt-14 sm:pt-16">
-                      <MapComponent
-                        regions={undefined}
-                        locations={[]}
-                        selectedRegion={0}
-                        focusLocation={null}
-                        activeRoute={null}
-                        currentRouteIndex={0}
-                        userLocation={null}
-                        teamLocations={teamLiveLocations}
-                        followMemberLocation={followMember}
-                        useInlineSvg={false}
-                        viewRestricted={true}
-                      />
-                    </div>
-                  </div>
-                </div>
+                <LiveMapPanel
+                  isOpen={isLiveMapOpen}
+                  onClose={() => setIsLiveMapOpen(false)}
+                />
               )}
 
               {/* Location Tracking Overlay - only for users with view permission */}

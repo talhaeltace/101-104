@@ -1,7 +1,0 @@
-# Supabase CLI project configuration
-#
-# This function is called from the login screen before any user session exists,
-# so it must be publicly invokable (no JWT required).
-
-[functions.send-login-otp]
-verify_jwt = false

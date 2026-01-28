@@ -135,47 +135,47 @@ export default function WeatherWidget({ selectedRegion, regions, variant = 'card
 
   if (variant === 'inline') {
     return (
-      <div className="flex items-center gap-2 text-xs text-gray-600">
-        <Icon className="w-4 h-4 text-gray-500" />
-        <span className="font-medium text-gray-700">{label}</span>
-        <span className="text-gray-500">•</span>
+      <div className="flex items-center gap-2 text-xs text-gray-500">
+        <Icon className="w-4 h-4 text-gray-400" />
+        <span className="font-medium text-gray-600">{label}</span>
+        <span className="text-gray-400">•</span>
         {loading && !snapshot ? (
-          <span className="text-gray-500">Hava durumu yükleniyor…</span>
+          <span className="text-gray-400">Hava durumu yükleniyor…</span>
         ) : snapshot ? (
           <>
-            <span className="text-gray-700">{temp}°C</span>
-            <span className="text-gray-500">({desc})</span>
+            <span className="text-gray-600">{temp}°C</span>
+            <span className="text-gray-400">({desc})</span>
           </>
         ) : (
-          <span className="text-gray-500">Hava durumu yok</span>
+          <span className="text-gray-400">Hava durumu yok</span>
         )}
       </div>
     );
   }
 
   return (
-    <div className="mt-2 rounded-xl border border-gray-200 bg-white px-3 py-2">
+    <div className="mt-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0">
-          <Icon className="w-5 h-5 text-gray-600" />
+          <Icon className="w-5 h-5 text-gray-400" />
           <div className="min-w-0">
-            <div className="text-xs font-semibold text-gray-800 truncate">{label} Hava Durumu</div>
-            <div className="text-xs text-gray-500 truncate">
+            <div className="text-xs font-semibold text-gray-700 truncate">{label} Hava Durumu</div>
+            <div className="text-xs text-gray-400 truncate">
               {loading && !snapshot ? 'Yükleniyor…' : snapshot ? desc : 'Veri alınamadı'}
             </div>
           </div>
         </div>
         <div className="text-right">
-          <div className="text-lg font-bold text-gray-900 tabular-nums">
+          <div className="text-lg font-bold text-gray-800 tabular-nums">
             {snapshot ? `${temp}°C` : '—'}
           </div>
         </div>
       </div>
 
       {snapshot && (
-        <div className="mt-2 flex items-center gap-3 text-xs text-gray-600">
+        <div className="mt-2 flex items-center gap-3 text-xs text-gray-500">
           <div className="flex items-center gap-1">
-            <Wind className="w-4 h-4 text-gray-500" />
+            <Wind className="w-4 h-4 text-gray-400" />
             <span className="tabular-nums">{wind} km/s</span>
           </div>
         </div>

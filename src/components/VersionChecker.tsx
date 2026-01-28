@@ -1,19 +1,19 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
 import { X, Download, AlertCircle, Loader2 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
+import { apiFetch } from '../lib/apiClient';
 
 // Current app version - UPDATE THIS WHEN YOU RELEASE NEW VERSION
-// Android: versionName 2.1.8 (versionCode 27)
-// iOS: MARKETING_VERSION 2.1.8 (build 36)
-const CURRENT_VERSION_NAME = '2.1.8';
-const CURRENT_ANDROID_VERSION_CODE = 27;
-const CURRENT_IOS_BUILD = 36;
+// Android: versionName 2.1.11 (versionCode 30)
+// iOS: MARKETING_VERSION 2.1.11 (build 40)
+const CURRENT_VERSION_NAME = '2.1.15';
+const CURRENT_ANDROID_VERSION_CODE = 34;
+const CURRENT_IOS_BUILD = 44;
 
-// Default store URLs (fallback when Supabase row has no store_url yet)
+// Default store URLs (fallback when server row has no store_url yet)
 const DEFAULT_ANDROID_STORE_URL =
-  'https://play.google.com/store/apps/details?id=com.nelit.project101104&hl=tr';
+  'https://play.google.com/store/apps/details?id=com.cartiva.app&hl=tr';
 const DEFAULT_IOS_STORE_URL =
   'https://apps.apple.com/tr/app/mapflow/id6755817368?l=tr';
 
@@ -36,58 +36,35 @@ export const VersionChecker = () => {
   const platform = Capacitor.getPlatform();
 
   useEffect(() => {
+    let cancelled = false;
+
+    const checkForUpdates = async () => {
+      try {
+        const currentCode =
+          platform === 'ios'
+            ? CURRENT_IOS_BUILD
+            : platform === 'android'
+              ? CURRENT_ANDROID_VERSION_CODE
+              : CURRENT_ANDROID_VERSION_CODE;
+
+        const qs = new URLSearchParams({ platform });
+        const res = await apiFetch<{ data?: AppVersion | null }>(`/app-version/latest?${qs.toString()}`);
+        const data = res?.data ?? null;
+
+        if (!cancelled && data && data.version_code > currentCode) {
+          setNewVersion(data);
+          setShowUpdate(true);
+        }
+      } catch (e) {
+        console.error('Version check error:', e);
+      }
+    };
+
     checkForUpdates();
-  }, []);
-
-  const checkForUpdates = async () => {
-    try {
-      const currentCode =
-        platform === 'ios'
-          ? CURRENT_IOS_BUILD
-          : platform === 'android'
-            ? CURRENT_ANDROID_VERSION_CODE
-            : CURRENT_ANDROID_VERSION_CODE;
-
-      // Prefer platform-aware rows (after migration adds app_version.platform).
-      let data: any = null;
-      let error: any = null;
-
-      const platformQuery = await supabase
-        .from('app_version')
-        .select('*')
-        .eq('platform', platform)
-        .order('version_code', { ascending: false })
-        .limit(1)
-        .single();
-
-      data = platformQuery.data;
-      error = platformQuery.error;
-
-      // Backward compatibility: if the platform column doesn't exist yet, fall back.
-      if (error && String(error.message || '').includes('platform')) {
-        const fallbackQuery = await supabase
-          .from('app_version')
-          .select('*')
-          .order('version_code', { ascending: false })
-          .limit(1)
-          .single();
-        data = fallbackQuery.data;
-        error = fallbackQuery.error;
-      }
-
-      if (error) {
-        console.error('Version check failed:', error);
-        return;
-      }
-
-      if (data && data.version_code > currentCode) {
-        setNewVersion(data);
-        setShowUpdate(true);
-      }
-    } catch (e) {
-      console.error('Version check error:', e);
-    }
-  };
+    return () => {
+      cancelled = true;
+    };
+  }, [platform]);
 
   const openExternal = (url: string) => {
     try {

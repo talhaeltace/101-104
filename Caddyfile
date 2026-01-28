@@ -1,0 +1,17 @@
+{
+	# Email is recommended for Let's Encrypt account notifications.
+	email info@nelit.com.tr
+
+	# Optional: tighten security a bit; Caddy defaults are already sane.
+	# servers {
+	# 	protocols h1 h2
+	# }
+}
+
+# Public API entrypoint
+api.nelit.com.tr {
+	encode gzip
+
+	# Proxy all requests to the local Fastify API
+	reverse_proxy 127.0.0.1:8787
+}

@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { apiFetch } from './apiClient';
 
 export type AppUserRow = {
   id: string;
@@ -20,34 +20,13 @@ export type MessageRow = {
 };
 
 export async function listActiveUsers(): Promise<AppUserRow[]> {
-  const { data, error } = await supabase
-    .from('app_users')
-    .select('id, username, role, full_name, is_active')
-    .order('created_at', { ascending: true });
-
-  if (error) throw error;
-  const rows = (data ?? []) as any[];
-
-  return rows
-    .filter(r => r && (r.is_active === undefined || r.is_active === true))
-    .map(r => ({
-      id: String(r.id),
-      username: String(r.username),
-      role: String(r.role ?? 'user'),
-      full_name: r.full_name ?? null,
-      is_active: r.is_active,
-    }));
+  const res = await apiFetch('/users/active');
+  return ((res as any)?.data ?? []) as AppUserRow[];
 }
 
 export async function fetchMessagesForUserThread(userId: string): Promise<MessageRow[]> {
-  const { data, error } = await supabase
-    .from('app_messages')
-    .select('id, created_at, user_id, sender_user_id, body, is_read, read_at, sender:sender_user_id (id, username, role, full_name, is_active)')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: true });
-
-  if (error) throw error;
-  return (data ?? []) as any;
+  const res = await apiFetch(`/messages/thread/${encodeURIComponent(userId)}`);
+  return ((res as any)?.data ?? []) as any;
 }
 
 export async function sendMessageToUserThread(params: {
@@ -58,11 +37,10 @@ export async function sendMessageToUserThread(params: {
   const body = String(params.body ?? '').trim();
   if (!body) return;
 
-  const { error } = await supabase
-    .from('app_messages')
-    .insert({ user_id: params.userId, sender_user_id: params.senderUserId, body });
-
-  if (error) throw error;
+  await apiFetch(`/messages/thread/${encodeURIComponent(params.userId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  });
 }
 
 export async function broadcastMessageToAll(params: {
@@ -73,28 +51,12 @@ export async function broadcastMessageToAll(params: {
   const body = String(params.body ?? '').trim();
   if (!body) return { sent: 0 };
 
-  const users = await listActiveUsers();
-  const targets = users
-    .filter(u => u.id !== params.senderUserId)
-    .filter(u => (params.includeAdmins ? true : String(u.role).toLowerCase() !== 'admin'));
+  const res = await apiFetch('/messages/broadcast', {
+    method: 'POST',
+    body: JSON.stringify({ body, includeAdmins: !!params.includeAdmins }),
+  });
 
-  const rows = targets.map(u => ({
-    user_id: u.id,
-    sender_user_id: params.senderUserId,
-    body,
-  }));
-
-  // Insert in batches to avoid payload limits.
-  const batchSize = 200;
-  let sent = 0;
-  for (let i = 0; i < rows.length; i += batchSize) {
-    const chunk = rows.slice(i, i + batchSize);
-    const { error } = await supabase.from('app_messages').insert(chunk);
-    if (error) throw error;
-    sent += chunk.length;
-  }
-
-  return { sent };
+  return { sent: Number((res as any)?.sent ?? 0) };
 }
 
 // Mark messages as read by the other side.
@@ -104,41 +66,7 @@ export async function markThreadRead(params: {
   userId: string;
   readerUserId: string;
 }): Promise<void> {
-  const { userId, readerUserId } = params;
-  // If reader is the thread owner (user), then mark admin-sent messages as read.
-  // If reader is admin, mark user-sent messages as read.
-  const isReaderThreadOwner = userId === readerUserId;
-
-  // Fetch unread message ids in thread.
-  const { data, error } = await supabase
-    .from('app_messages')
-    .select('id, user_id, sender_user_id, is_read')
-    .eq('user_id', userId)
-    .eq('is_read', false);
-
-  if (error) throw error;
-  const rows = (data ?? []) as any[];
-
-  const idsToMark = rows
-    .filter(r => {
-      const senderId = String(r.sender_user_id);
-      const threadUserId = String(r.user_id);
-      if (isReaderThreadOwner) {
-        // reader is user -> mark messages sent by others (admins)
-        return senderId !== threadUserId;
-      }
-      // reader is admin -> mark messages sent by user
-      return senderId === threadUserId;
-    })
-    .map(r => Number(r.id))
-    .filter(n => Number.isFinite(n));
-
-  if (idsToMark.length === 0) return;
-
-  const { error: updErr } = await supabase
-    .from('app_messages')
-    .update({ is_read: true, read_at: new Date().toISOString() })
-    .in('id', idsToMark);
-
-  if (updErr) throw updErr;
+  await apiFetch(`/messages/thread/${encodeURIComponent(params.userId)}/mark-read`, {
+    method: 'POST',
+  });
 }

@@ -77,30 +77,30 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
       <div className="bg-white w-full h-full overflow-hidden flex flex-col overscroll-contain">
         
         {/* Header */}
-        <div className="relative px-6 py-5 border-b border-slate-800 bg-slate-900 text-white flex-shrink-0">
+        <div className="relative px-6 py-5 border-b border-gray-200 bg-white shadow-sm flex-shrink-0">
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-4">
               {/* Status indicator */}
-              <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center">
                 <MapPin className="w-6 h-6 text-white" />
               </div>
 
               <div className="flex flex-col">
                 <div className="flex items-center gap-3 flex-wrap">
-                  <h2 className="text-2xl font-bold">{location.name}</h2>
+                  <h2 className="text-2xl font-bold text-gray-800">{location.name}</h2>
                   <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${status.bgColor} ${status.textColor} border ${status.borderColor}`}>
                     {status.label}
                   </span>
                 </div>
-                <span className="text-sm text-white/70">{location.center}</span>
+                <span className="text-sm text-gray-500">{location.center}</span>
               </div>
             </div>
             
             <button 
               onClick={onClose} 
-              className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
             >
-              <X className="w-5 h-5 text-white/80" />
+              <X className="w-5 h-5 text-gray-500" />
             </button>
           </div>
 
@@ -108,7 +108,7 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
           {location.note && location.note.length > 0 && (
             <button 
               onClick={() => setNoteOpen(true)} 
-              className="absolute bottom-3 right-6 flex items-center gap-2 px-3 py-1.5 bg-white/10 hover:bg-white/15 rounded-lg text-sm font-medium text-white transition-colors"
+              className="absolute bottom-3 right-6 flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium text-gray-700 transition-colors"
             >
               <FileText className="w-4 h-4" />
               Notu Görüntüle

@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { apiFetch } from './apiClient';
 
 export type TaskStatus = 'assigned' | 'in_progress' | 'completed' | 'cancelled';
 
@@ -80,28 +80,22 @@ export async function createTask(input: {
   routeLocationIds: RouteLocationId[];
 }): Promise<{ success: boolean; data?: Task; error?: string }> {
   try {
-    const { data, error } = await supabase
-      .from('tasks')
-      .insert({
+    const res = await apiFetch('/tasks', {
+      method: 'POST',
+      body: JSON.stringify({
         title: input.title,
         description: input.description ?? null,
-        created_by_user_id: input.createdByUserId ?? null,
-        created_by_username: input.createdByUsername ?? null,
         assigned_to_user_id: input.assignedToUserId,
         assigned_to_username: input.assignedToUsername ?? null,
         region_id: input.regionId ?? null,
         region_name: input.regionName ?? null,
         route_location_ids: input.routeLocationIds,
-        status: 'assigned'
-      })
-      .select('*')
-      .single();
+      }),
+    });
 
-    if (error || !data) {
-      return { success: false, error: error?.message ?? 'Görev oluşturulamadı' };
-    }
-
-    return { success: true, data: toTask(data as TaskRow) };
+    const row = (res as any)?.data as TaskRow | undefined;
+    if (!row) return { success: false, error: 'Görev oluşturulamadı' };
+    return { success: true, data: toTask(row) };
   } catch (e: any) {
     return { success: false, error: e?.message ?? 'Görev oluşturulamadı' };
   }
@@ -109,19 +103,9 @@ export async function createTask(input: {
 
 export async function listTasksForUser(userId: string): Promise<Task[]> {
   try {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('assigned_to_user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(200);
-
-    if (error) {
-      console.warn('listTasksForUser error', error);
-      return [];
-    }
-
-    return (data || []).map((r: any) => toTask(r as TaskRow));
+    const res = await apiFetch(`/tasks?assigned_to_user_id=${encodeURIComponent(userId)}`);
+    const rows = ((res as any)?.data ?? []) as TaskRow[];
+    return rows.map(toTask);
   } catch (e) {
     console.warn('listTasksForUser exception', e);
     return [];
@@ -130,19 +114,9 @@ export async function listTasksForUser(userId: string): Promise<Task[]> {
 
 export async function listTasksCreatedByUser(userId: string): Promise<Task[]> {
   try {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('created_by_user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(200);
-
-    if (error) {
-      console.warn('listTasksCreatedByUser error', error);
-      return [];
-    }
-
-    return (data || []).map((r: any) => toTask(r as TaskRow));
+    const res = await apiFetch(`/tasks?created_by_user_id=${encodeURIComponent(userId)}`);
+    const rows = ((res as any)?.data ?? []) as TaskRow[];
+    return rows.map(toTask);
   } catch (e) {
     console.warn('listTasksCreatedByUser exception', e);
     return [];
@@ -151,28 +125,10 @@ export async function listTasksCreatedByUser(userId: string): Promise<Task[]> {
 
 export async function updateTaskStatus(taskId: string, status: TaskStatus): Promise<boolean> {
   try {
-    const patch: Record<string, any> = { status };
-    const nowIso = new Date().toISOString();
-
-    if (status === 'assigned') {
-      patch.started_at = null;
-      patch.completed_at = null;
-      patch.cancelled_at = null;
-    }
-    if (status === 'in_progress') patch.started_at = nowIso;
-    if (status === 'completed') patch.completed_at = nowIso;
-    if (status === 'cancelled') patch.cancelled_at = nowIso;
-
-    const { error } = await supabase
-      .from('tasks')
-      .update(patch)
-      .eq('id', taskId);
-
-    if (error) {
-      console.warn('updateTaskStatus error', error);
-      return false;
-    }
-
+    await apiFetch(`/tasks/${encodeURIComponent(taskId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
     return true;
   } catch (e) {
     console.warn('updateTaskStatus exception', e);

@@ -28,7 +28,6 @@ export default class AppErrorBoundary extends React.Component<React.PropsWithChi
     }
 
     // Still log to console for Xcode/WKWebView logs.
-    // eslint-disable-next-line no-console
     console.error('App crashed:', error);
   }
 

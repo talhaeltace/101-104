@@ -51,10 +51,10 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ selectedRegion, onRegio
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={toggleOpen}
-        className="inline-flex items-center justify-between gap-2 bg-white border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors duration-150 w-full"
+        className="inline-flex items-center justify-between gap-2 bg-white border border-gray-200 rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors duration-150 w-full shadow-sm"
       >
         <span className="truncate w-full text-left">{selectedLabel}</span>
-        {open ? <ChevronUp className="w-4 h-4 text-gray-500 ml-2" /> : <ChevronDown className="w-4 h-4 text-gray-500 ml-2" />}
+        {open ? <ChevronUp className="w-4 h-4 text-gray-400 ml-2" /> : <ChevronDown className="w-4 h-4 text-gray-400 ml-2" />}
       </button>
 
       {open && (
@@ -67,7 +67,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ selectedRegion, onRegio
             role="option"
             aria-selected={selectedRegion === 0}
             tabIndex={0}
-            className={`px-4 py-2 text-sm cursor-pointer hover:bg-blue-50 ${selectedRegion === 0 ? 'bg-blue-50' : ''}`}
+            className={`px-4 py-2 text-sm cursor-pointer text-gray-700 hover:bg-gray-50 ${selectedRegion === 0 ? 'bg-blue-50 text-blue-600' : ''}`}
             onClick={() => handleSelect(0)}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleSelect(0); }}
           >
@@ -80,7 +80,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ selectedRegion, onRegio
               role="option"
               aria-selected={selectedRegion === region.id}
               tabIndex={0}
-              className={`px-4 py-2 text-sm cursor-pointer hover:bg-blue-50 ${selectedRegion === region.id ? 'bg-blue-50' : ''}`}
+              className={`px-4 py-2 text-sm cursor-pointer text-gray-700 hover:bg-gray-50 ${selectedRegion === region.id ? 'bg-blue-50 text-blue-600' : ''}`}
               onClick={() => handleSelect(region.id)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleSelect(region.id); }}
             >

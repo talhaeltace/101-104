@@ -1,28 +1,36 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
 import { regions, Region, Location } from '../data/regions';
+import {
+  createLocationRow,
+  deleteLocationRow,
+  fetchLocationRows,
+  seedLocationsIfEmpty,
+  updateLocationRow,
+} from '../lib/apiLocations';
+import { getAuthToken } from '../lib/apiClient';
 
-export const useLocations = () => {
+export const useLocations = (opts?: { enabled?: boolean }) => {
+  const enabled = opts?.enabled ?? true;
   const [locations, setLocations] = useState<Region[]>(regions);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const parseProjectId = (raw: unknown): string | number | undefined => {
+  const parseProjectId = useCallback((raw: unknown): string | number | undefined => {
     if (raw === null || raw === undefined) return undefined;
     const value = String(raw).trim();
     if (!value) return undefined;
     if (/^\d+$/.test(value)) return Number(value);
     return value;
-  };
+  }, []);
 
-  const getEnvProjectId = (): string | number | undefined => {
+  const getEnvProjectId = useCallback((): string | number | undefined => {
     try {
       // Optional: allow deployments where DB enforces locations.project_id NOT NULL
       return parseProjectId((import.meta as any)?.env?.VITE_PROJECT_ID);
     } catch {
       return undefined;
     }
-  };
+  }, [parseProjectId]);
 
   // Varsayılan verileri veritabanına kaydet
   const initializeDatabase = useCallback(async () => {
@@ -71,29 +79,35 @@ export const useLocations = () => {
         }))
       );
 
-      const { error } = await supabase.from('locations').insert(locationsToInsert);
-      if (error) {
-        console.error('Veritabanı başlatma hatası:', error);
+      const result = await seedLocationsIfEmpty(locationsToInsert);
+      if ((result.inserted ?? 0) === 0 && !result.skipped) {
+        console.warn('Veritabanı seed edilmedi (inserted=0)');
       }
     } catch (err) {
       console.error('Beklenmeyen veritabanı başlatma hatası:', err);
     }
-  }, []);
+  }, [getEnvProjectId]);
 
   // Veritabanından verileri yükle
   const loadLocations = useCallback(async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('locations')
-        .select('*')
-        .order('region_id', { ascending: true });
+      setError(null);
 
-      if (error) {
-        console.error('Veri yükleme hatası:', error);
+      // Don't call protected endpoints until auth is ready.
+      if (!enabled) {
         setLocations(regions);
         return;
       }
+
+      const token = getAuthToken();
+      if (!token) {
+        setLocations(regions);
+        return;
+      }
+
+      const envProjectId = getEnvProjectId();
+      const data = await fetchLocationRows({ projectId: envProjectId });
 
       if (data && data.length > 0) {
         const groupedData = data.reduce((acc: any, item: any) => {
@@ -163,59 +177,48 @@ export const useLocations = () => {
     } finally {
       setLoading(false);
     }
-  }, [initializeDatabase]);
+  }, [enabled, getEnvProjectId, initializeDatabase]);
 
   // Lokasyon güncelle
   const updateLocation = async (updatedLocation: Location) => {
     try {
-      const { error } = await supabase
-        .from('locations')
-        .update({
-          name: updatedLocation.name,
-          center: updatedLocation.center,
-          latitude: updatedLocation.coordinates[0],
-          longitude: updatedLocation.coordinates[1],
+      await updateLocationRow(updatedLocation.id, {
+        name: updatedLocation.name,
+        center: updatedLocation.center,
+        latitude: updatedLocation.coordinates[0],
+        longitude: updatedLocation.coordinates[1],
         address: updatedLocation.address || null,
-          note: updatedLocation.note || null,
-          brand: updatedLocation.brand,
-          model: updatedLocation.model,
-          has_gps: updatedLocation.details.hasGPS,
-          has_rtu: updatedLocation.details.hasRTU,
-          has_panos: updatedLocation.details.hasPanos,
-          is_accepted: updatedLocation.details.isAccepted || false,
-          has_card_access: updatedLocation.details.hasCardAccess || false,
-          is_installed_card_access: updatedLocation.details.isInstalledCardAccess || false,
-          is_active_card_access: updatedLocation.details.isActiveCardAccess || false,
-          is_two_door_card_access: updatedLocation.details.isTwoDoorCardAccess || false,
-          is_active: updatedLocation.details.isActive,
-          is_configured: updatedLocation.details.isConfigured,
-          is_installed: updatedLocation.details.isInstalled || false,
-          security_firewall: updatedLocation.details.equipment.securityFirewall,
-          network_switch: updatedLocation.details.equipment.networkSwitch,
-          rtu_count: updatedLocation.details.equipment.rtuCount,
-          gps_card_antenna: updatedLocation.details.equipment.gpsCardAntenna,
-          rtu_panel: updatedLocation.details.equipment.rtuPanel,
-          btp_panel: updatedLocation.details.equipment.btpPanel,
-          energy_analyzer: updatedLocation.details.equipment.energyAnalyzer,
-          ykgc_count: updatedLocation.details.equipment.ykgcCount,
-          teias_rtu_installation: updatedLocation.details.equipment.teiasRtuInstallation,
-          indoor_dome_camera: updatedLocation.details.equipment.indoorDomeCamera,
-          network_video_management: updatedLocation.details.equipment.networkVideoManagement,
-          smart_control_unit: updatedLocation.details.equipment.smartControlUnit,
-          card_reader: updatedLocation.details.equipment.cardReader,
-          network_recording_unit: updatedLocation.details.equipment.networkRecordingUnit,
-          access_control_system: updatedLocation.details.equipment.accessControlSystem,
-          transformer_center_type: updatedLocation.details.equipment.transformerCenterType || null,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', updatedLocation.id);
-
-      if (error) {
-        console.error('Güncelleme hatası:', error);
-        // Don't trip the global "Varsayılan veriler" fallback screen for mutation errors.
-        alert(`Güncelleme sırasında hata oluştu.\n\n${error.message || ''}`);
-        return false;
-      }
+        note: updatedLocation.note || null,
+        brand: updatedLocation.brand,
+        model: updatedLocation.model,
+        has_gps: updatedLocation.details.hasGPS,
+        has_rtu: updatedLocation.details.hasRTU,
+        has_panos: updatedLocation.details.hasPanos,
+        is_accepted: updatedLocation.details.isAccepted || false,
+        has_card_access: updatedLocation.details.hasCardAccess || false,
+        is_installed_card_access: updatedLocation.details.isInstalledCardAccess || false,
+        is_active_card_access: updatedLocation.details.isActiveCardAccess || false,
+        is_two_door_card_access: updatedLocation.details.isTwoDoorCardAccess || false,
+        is_active: updatedLocation.details.isActive,
+        is_configured: updatedLocation.details.isConfigured,
+        is_installed: updatedLocation.details.isInstalled || false,
+        security_firewall: updatedLocation.details.equipment.securityFirewall,
+        network_switch: updatedLocation.details.equipment.networkSwitch,
+        rtu_count: updatedLocation.details.equipment.rtuCount,
+        gps_card_antenna: updatedLocation.details.equipment.gpsCardAntenna,
+        rtu_panel: updatedLocation.details.equipment.rtuPanel,
+        btp_panel: updatedLocation.details.equipment.btpPanel,
+        energy_analyzer: updatedLocation.details.equipment.energyAnalyzer,
+        ykgc_count: updatedLocation.details.equipment.ykgcCount,
+        teias_rtu_installation: updatedLocation.details.equipment.teiasRtuInstallation,
+        indoor_dome_camera: updatedLocation.details.equipment.indoorDomeCamera,
+        network_video_management: updatedLocation.details.equipment.networkVideoManagement,
+        smart_control_unit: updatedLocation.details.equipment.smartControlUnit,
+        card_reader: updatedLocation.details.equipment.cardReader,
+        network_recording_unit: updatedLocation.details.equipment.networkRecordingUnit,
+        access_control_system: updatedLocation.details.equipment.accessControlSystem,
+        transformer_center_type: updatedLocation.details.equipment.transformerCenterType || null,
+      });
 
       // Local state'i güncelle
       setLocations(prevRegions =>
@@ -268,6 +271,7 @@ export const useLocations = () => {
 
       const insertObj: any = {
         id: baseId,
+        ...(getEnvProjectId() !== undefined ? { project_id: String(getEnvProjectId()) } : {}),
         region_id: regionId,
         name: newLocation.name,
         center: newLocation.center,
@@ -296,33 +300,6 @@ export const useLocations = () => {
         network_recording_unit: newLocation.details.equipment.networkRecordingUnit,
         access_control_system: newLocation.details.equipment.accessControlSystem,
         transformer_center_type: newLocation.details.equipment.transformerCenterType || null,
-        created_at: new Date().toISOString()
-      };
-
-      const resolveProjectIdFromDb = async (): Promise<string | number | undefined> => {
-        // Try to copy project_id from an existing row to satisfy NOT NULL constraints.
-        // If the column doesn't exist, safely return undefined.
-        try {
-          const tryQuery = async (filterRegion: boolean) => {
-            let q = supabase
-              .from('locations')
-              .select('project_id')
-              .limit(1);
-            if (filterRegion) q = q.eq('region_id', regionId);
-            const { data, error } = await q.maybeSingle();
-            if (error) {
-              const msg = String((error as any).message || '').toLowerCase();
-              if (msg.includes('does not exist') && msg.includes('project_id')) return undefined;
-              if (msg.includes('column') && msg.includes('project_id')) return undefined;
-              return undefined;
-            }
-            return parseProjectId((data as any)?.project_id);
-          };
-
-          return (await tryQuery(true)) ?? (await tryQuery(false));
-        } catch {
-          return undefined;
-        }
       };
 
       // Optional columns (may not exist on older DB schemas)
@@ -351,56 +328,9 @@ export const useLocations = () => {
         insertObj.is_installed = newLocation.details.isInstalled;
       }
 
-      const runInsert = async (obj: any) => {
-        return await supabase
-          .from('locations')
-          .insert([obj])
-          .select()
-          .single();
-      };
-
-      let { data, error } = await runInsert(insertObj);
-
-      // If DB enforces project_id NOT NULL, try to auto-fill it and retry.
-      if (error) {
-        const msg = String((error as any).message || '').toLowerCase();
-        if (msg.includes('project_id') && msg.includes('null value') && msg.includes('not-null')) {
-          const projectId = (await resolveProjectIdFromDb()) ?? getEnvProjectId();
-          if (projectId !== undefined) {
-            insertObj.project_id = projectId;
-            ({ data, error } = await runInsert(insertObj));
-          } else {
-            alert(
-              'Lokasyon oluşturulamadı. Veritabanı "project_id" alanını zorunlu istiyor ama uygulama bu değeri bilmiyor.\n\n' +
-              'Çözüm: Mevcut kayıtlarda project_id olduğundan emin olun veya build ortamına VITE_PROJECT_ID ekleyin.'
-            );
-          }
-        }
-      }
-
-      // Backward compatibility: DB might not have newer optional columns yet.
-      if (error && String((error as any).message || '').toLowerCase().includes('does not exist')) {
-        const legacyObj: any = { ...insertObj };
-        delete legacyObj.address;
-        delete legacyObj.note;
-        delete legacyObj.is_accepted;
-        delete legacyObj.has_card_access;
-        delete legacyObj.is_installed_card_access;
-        delete legacyObj.is_active_card_access;
-        delete legacyObj.is_two_door_card_access;
-        delete legacyObj.is_installed;
-        ({ data, error } = await runInsert(legacyObj));
-      }
-
-      if (error) {
-        console.error('Oluşturma hatası:', error);
-        // Don't trip the global "Varsayılan veriler" fallback screen for mutation errors.
-        alert(`Lokasyon oluşturulurken hata oluştu.\n\n${error.message || ''}`);
-        return null;
-      }
+      const inserted = await createLocationRow(insertObj);
 
       // Map inserted row back to Location shape
-      const inserted = data as any;
       const locationObj: Location = {
         id: inserted.id,
         name: inserted.name,
@@ -465,17 +395,7 @@ export const useLocations = () => {
   // Lokasyon sil
   const deleteLocation = async (locationId: string) => {
     try {
-      const { error } = await supabase
-        .from('locations')
-        .delete()
-        .eq('id', locationId);
-
-      if (error) {
-        console.error('Silme hatası:', error);
-        // Don't trip the global "Varsayılan veriler" fallback screen for mutation errors.
-        alert(`Lokasyon silinirken hata oluştu.\n\n${error.message || ''}`);
-        return false;
-      }
+      await deleteLocationRow(locationId);
 
       setLocations(prevRegions =>
         prevRegions.map(r => ({ ...r, locations: r.locations.filter(l => l.id !== locationId) }))
@@ -490,8 +410,14 @@ export const useLocations = () => {
   };
 
   useEffect(() => {
+    if (!enabled) {
+      setLocations(regions);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     loadLocations();
-  }, [loadLocations]);
+  }, [enabled, loadLocations]);
 
   return {
     locations,

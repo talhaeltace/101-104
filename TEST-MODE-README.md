@@ -83,4 +83,4 @@ Sağ üstteki **Aktiviteler** panelinde şunları göreceksiniz:
 - Test modunda gerçek GPS kullanılmaz
 - Her lokasyon için timer resetlenir
 - Rota tamamlandığında tracking durur
-- Aktiviteler Supabase'e kaydedilir (gerçek veriler)
+- Aktiviteler API/DB'ye kaydedilir (gerçek veriler)

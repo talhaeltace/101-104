@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { apiFetch } from './apiClient';
 
 // ============================================
 // TYPES
@@ -90,20 +90,12 @@ export const DEFAULT_PERMISSIONS: Record<string, UserPermissions> = {
  */
 export async function listUsers(): Promise<AppUser[]> {
   try {
-    const { data, error } = await supabase
-      .from('app_users')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const res = await apiFetch('/admin/users');
+    const rows = ((res as any)?.users ?? []) as any[];
 
-    if (error) {
-      console.error('Failed to list users:', error);
-      return [];
-    }
+    console.log('Raw users from API:', rows); // DEBUG
 
-    console.log('Raw users from DB:', data); // DEBUG
-
-    // app_users tablosundaki veriyi AppUser formatına dönüştür
-    return (data || []).map(user => {
+    return rows.map(user => {
       const role = user.role || 'user';
       const roleDefaults = DEFAULT_PERMISSIONS[role] || DEFAULT_PERMISSIONS['user'];
       
@@ -127,7 +119,7 @@ export async function listUsers(): Promise<AppUser[]> {
         phone: user.phone || undefined,
         is_active: user.is_active !== false,
         otp_required: user.otp_required !== false,
-        created_at: user.created_at,
+        created_at: user.created_at ?? new Date().toISOString(),
         last_login_at: user.last_login_at || undefined,
         // Permissions - veritabanından gelen değeri kullan, yoksa rol varsayılanı
         can_view: typeof user.can_view === 'boolean' ? user.can_view : roleDefaults.can_view,
@@ -158,30 +150,23 @@ export async function createUser(
   phone?: string
 ): Promise<{ success: boolean; error?: string; data?: { id: string } }> {
   try {
-    const params: Record<string, any> = {
-      p_username: username,
-      p_password: password,
-      p_role: role
-    };
+    const res = await apiFetch('/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        username,
+        password,
+        role,
+        email,
+        full_name: fullName,
+        phone,
+      }),
+    });
 
-    // Only include optional args when actually provided.
-    if (email != null && String(email).trim() !== '') params.p_email = email;
-    if (fullName != null && String(fullName).trim() !== '') params.p_full_name = fullName;
-    if (phone != null && String(phone).trim() !== '') params.p_phone = phone;
-
-    const { data, error } = await supabase.rpc('admin_create_app_user', params);
-
-    if (error) {
-      console.error('Failed to create user:', error);
-      return { success: false, error: error.message };
+    if ((res as any)?.success !== true) {
+      return { success: false, error: (res as any)?.error || 'Kullanıcı oluşturulamadı' };
     }
 
-    const payload = data as any;
-    if (!payload?.success) {
-      return { success: false, error: payload?.error || 'Kullanıcı oluşturulamadı' };
-    }
-
-    return { success: true, data: { id: String(payload.user_id) } };
+    return { success: true, data: { id: String((res as any)?.user_id) } };
   } catch (err) {
     console.error('Create user error:', err);
     return { success: false, error: 'Kullanıcı oluşturulurken hata oluştu' };
@@ -205,31 +190,23 @@ export async function updateUser(
   }
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const params: Record<string, any> = {
-      p_user_id: userId
-    };
+    const body: Record<string, any> = {};
+    if (updates.username != null && String(updates.username).trim() !== '') body.username = updates.username;
+    if (updates.password != null && String(updates.password).length > 0) body.password = updates.password;
+    if (updates.role != null && String(updates.role).trim() !== '') body.role = updates.role;
+    if (updates.email != null) body.email = updates.email;
+    if (updates.fullName != null) body.full_name = updates.fullName;
+    if (updates.phone != null) body.phone = updates.phone;
+    if (typeof updates.isActive === 'boolean') body.is_active = updates.isActive;
+    if (typeof updates.otpRequired === 'boolean') body.otp_required = updates.otpRequired;
 
-    // IMPORTANT: PostgREST RPC signature matching considers provided argument names.
-    // Passing extra keys (even with null) can fail if the DB function signature is older.
-    if (updates.username != null && String(updates.username).trim() !== '') params.p_username = updates.username;
-    if (updates.password != null && String(updates.password).length > 0) params.p_password = updates.password;
-    if (updates.role != null && String(updates.role).trim() !== '') params.p_role = updates.role;
-    if (updates.email != null && String(updates.email).trim() !== '') params.p_email = updates.email;
-    if (updates.fullName != null && String(updates.fullName).trim() !== '') params.p_full_name = updates.fullName;
-    if (updates.phone != null && String(updates.phone).trim() !== '') params.p_phone = updates.phone;
-    if (typeof updates.isActive === 'boolean') params.p_is_active = updates.isActive;
-    if (typeof updates.otpRequired === 'boolean') params.p_otp_required = updates.otpRequired;
+    const res = await apiFetch(`/admin/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
 
-    const { data, error } = await supabase.rpc('admin_update_app_user', params);
-
-    if (error) {
-      console.error('Failed to update user:', error);
-      return { success: false, error: error.message };
-    }
-
-    const payload = data as any;
-    if (!payload?.success) {
-      return { success: false, error: payload?.error || 'Kullanıcı güncellenemedi' };
+    if ((res as any)?.success !== true) {
+      return { success: false, error: (res as any)?.error || 'Kullanıcı güncellenemedi' };
     }
 
     return { success: true };
@@ -259,17 +236,15 @@ export async function updateUserPermissions(
 
     console.log('Saving permissions for user:', userId, updateData); // DEBUG
 
-    const { error, data } = await supabase
-      .from('app_users')
-      .update(updateData)
-      .eq('id', userId)
-      .select();
+    const res = await apiFetch(`/admin/users/${encodeURIComponent(userId)}/permissions`, {
+      method: 'PATCH',
+      body: JSON.stringify(updateData),
+    });
 
-    console.log('Save result:', { error, data }); // DEBUG
+    console.log('Save result:', res); // DEBUG
 
-    if (error) {
-      console.error('Failed to update user permissions:', error);
-      return { success: false, error: error.message };
+    if ((res as any)?.success !== true) {
+      return { success: false, error: (res as any)?.error || 'Yetkiler güncellenemedi' };
     }
 
     return { success: true };
@@ -284,16 +259,12 @@ export async function updateUserPermissions(
  */
 export async function deleteUser(userId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const { error } = await supabase
-      .from('app_users')
-      .delete()
-      .eq('id', userId);
-
-    if (error) {
-      console.error('Failed to delete user:', error);
-      return { success: false, error: error.message };
+    const res = await apiFetch(`/admin/users/${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+    });
+    if ((res as any)?.success !== true) {
+      return { success: false, error: (res as any)?.error || 'Kullanıcı silinemedi' };
     }
-
     return { success: true };
   } catch (err) {
     console.error('Delete user error:', err);

@@ -1,6 +1,6 @@
 {
-  "appId": "com.nelit.project101104",
-  "appName": "MapFlow",
+  "appId": "com.cartiva.app",
+  "appName": "Cartiva",
   "webDir": "dist",
   "bundledWebRuntime": false
 }

@@ -24,6 +24,12 @@ const SwipeConfirm: React.FC<SwipeConfirmProps> = ({
   const sliderRef = useRef<HTMLDivElement>(null);
   const startXRef = useRef(0);
   const maxDragRef = useRef(0);
+  const dragXRef = useRef(0);
+
+  const setDragXSync = (value: number) => {
+    dragXRef.current = value;
+    setDragX(value);
+  };
 
   useEffect(() => {
     let raf = 0;
@@ -53,38 +59,7 @@ const SwipeConfirm: React.FC<SwipeConfirmProps> = ({
   const handleStart = (clientX: number) => {
     if (disabled || isConfirmed) return;
     setIsDragging(true);
-    startXRef.current = clientX - dragX;
-  };
-
-  const handleMove = (clientX: number) => {
-    if (!isDragging || disabled || isConfirmed) return;
-    const newX = clientX - startXRef.current;
-    const clampedX = Math.max(0, Math.min(newX, maxDragRef.current));
-    setDragX(clampedX);
-  };
-
-  const handleEnd = () => {
-    if (!isDragging || disabled || isConfirmed) return;
-    setIsDragging(false);
-
-    // Check if dragged past threshold (80%)
-    const threshold = maxDragRef.current * 0.8;
-    if (dragX >= threshold) {
-      // Confirmed!
-      setIsConfirmed(true);
-      setDragX(maxDragRef.current);
-      setTimeout(() => {
-        onConfirm();
-        // Reset after animation
-        setTimeout(() => {
-          setIsConfirmed(false);
-          setDragX(0);
-        }, 300);
-      }, 200);
-    } else {
-      // Reset
-      setDragX(0);
-    }
+    startXRef.current = clientX - dragXRef.current;
   };
 
   // Mouse events
@@ -93,44 +68,70 @@ const SwipeConfirm: React.FC<SwipeConfirmProps> = ({
     handleStart(e.clientX);
   };
 
-  const handleMouseMove = (e: MouseEvent) => {
-    handleMove(e.clientX);
-  };
-
-  const handleMouseUp = () => {
-    handleEnd();
-  };
-
   // Touch events
   const handleTouchStart = (e: React.TouchEvent) => {
     handleStart(e.touches[0].clientX);
   };
 
-  const handleTouchMove = (e: TouchEvent) => {
-    if (e.touches.length > 0) {
-      handleMove(e.touches[0].clientX);
-    }
-  };
-
-  const handleTouchEnd = () => {
-    handleEnd();
-  };
-
   useEffect(() => {
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-      window.addEventListener('touchmove', handleTouchMove);
-      window.addEventListener('touchend', handleTouchEnd);
+    if (!isDragging) return;
 
-      return () => {
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
-        window.removeEventListener('touchmove', handleTouchMove);
-        window.removeEventListener('touchend', handleTouchEnd);
-      };
-    }
-  }, [isDragging, dragX]);
+    const move = (clientX: number) => {
+      if (disabled || isConfirmed) return;
+      const newX = clientX - startXRef.current;
+      const clampedX = Math.max(0, Math.min(newX, maxDragRef.current));
+      setDragXSync(clampedX);
+    };
+
+    const end = () => {
+      if (disabled || isConfirmed) return;
+      setIsDragging(false);
+
+      // Check if dragged past threshold (80%)
+      const threshold = maxDragRef.current * 0.8;
+      if (dragXRef.current >= threshold) {
+        // Confirmed!
+        setIsConfirmed(true);
+        setDragXSync(maxDragRef.current);
+        setTimeout(() => {
+          onConfirm();
+          // Reset after animation
+          setTimeout(() => {
+            setIsConfirmed(false);
+            setDragXSync(0);
+          }, 300);
+        }, 200);
+      } else {
+        // Reset
+        setDragXSync(0);
+      }
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      move(e.clientX);
+    };
+    const onMouseUp = () => {
+      end();
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length > 0) move(e.touches[0].clientX);
+    };
+    const onTouchEnd = () => {
+      end();
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('touchmove', onTouchMove);
+    window.addEventListener('touchend', onTouchEnd);
+
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [isDragging, disabled, isConfirmed, onConfirm]);
 
   const progress = maxDragRef.current > 0 ? (dragX / maxDragRef.current) * 100 : 0;
 
