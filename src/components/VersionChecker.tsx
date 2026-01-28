@@ -9,13 +9,13 @@ import { apiFetch } from '../lib/apiClient';
 // iOS: MARKETING_VERSION 2.1.11 (build 40)
 const CURRENT_VERSION_NAME = '2.1.15';
 const CURRENT_ANDROID_VERSION_CODE = 34;
-const CURRENT_IOS_BUILD = 44;
+const CURRENT_IOS_BUILD = 45;
 
 // Default store URLs (fallback when server row has no store_url yet)
 const DEFAULT_ANDROID_STORE_URL =
   'https://play.google.com/store/apps/details?id=com.cartiva.app&hl=tr';
-const DEFAULT_IOS_STORE_URL =
-  'https://apps.apple.com/tr/app/mapflow/id6755817368?l=tr';
+// Intentionally empty: set the correct Cartiva App Store URL via `/app-version` rows.
+const DEFAULT_IOS_STORE_URL = '';
 
 interface AppVersion {
   version_code: number;
