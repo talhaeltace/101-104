@@ -5,7 +5,7 @@ import type { AuthUser } from '../lib/authUser';
 import AuthLayout from '../components/auth/AuthLayout';
 
 interface Props {
-  onLogin: (user: AuthUser, token: string) => void;
+  onLogin: (user: AuthUser, token: string, rememberMe: boolean) => void;
 }
 
 const LoginPage: React.FC<Props> = ({ onLogin }) => {
@@ -14,8 +14,8 @@ const LoginPage: React.FC<Props> = ({ onLogin }) => {
   return (
     <AuthLayout>
       <LoginForm
-        onSuccess={(user, token) => {
-          onLogin(user, token);
+        onSuccess={(user, token, rememberMe) => {
+          onLogin(user, token, rememberMe);
           navigate('/');
         }}
         onCancel={() => {

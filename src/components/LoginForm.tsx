@@ -1,12 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { AuthUser } from '../lib/authUser';
 import { requestOtp, verifyOtp, registerUser } from '../lib/apiAuth';
-import { setAuthToken } from '../lib/apiClient';
 import { User, Lock, Loader2, Mail, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import OtpCodeInput from './auth/OtpCodeInput';
 
 interface Props {
-  onSuccess: (user: AuthUser, token: string) => void;
+  onSuccess: (user: AuthUser, token: string, rememberMe: boolean) => void;
   onCancel: () => void;
 }
 
@@ -26,6 +25,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
 
   const otpSecondsLeft = useMemo(() => {
     const ms = otpCooldownUntil - Date.now();
@@ -114,8 +114,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
 
       // Some users are allowed to login without OTP (admin-controlled).
       if (data?.bypassOtp && data?.user && data?.token) {
-        setAuthToken(String(data.token));
-        onSuccess(data.user, String(data.token));
+        onSuccess(data.user, String(data.token), rememberMe);
         return;
       }
 
@@ -162,7 +161,7 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
         setLoading(false);
         return;
       }
-      onSuccess(res.user, String(res.token));
+      onSuccess(res.user, String(res.token), rememberMe);
     } catch (err: any) {
       setError(await getInvokeErrorMessage(err));
     } finally {
@@ -326,6 +325,16 @@ const LoginForm: React.FC<Props> = ({ onSuccess, onCancel }) => {
                   </button>
                 </div>
               </div>
+
+              <label className="flex items-center gap-2 text-sm text-gray-600 select-none">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                Beni hatırla (30 gün)
+              </label>
 
               {error && (
                 <div className="rounded-xl bg-red-50 border border-red-200 p-3 text-sm text-red-600">

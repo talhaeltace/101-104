@@ -39,7 +39,7 @@ android {
                 applicationId "com.cartiva.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-                    versionCode 34
+                    versionCode 35
           versionName "2.1.15"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
@@ -82,10 +82,10 @@ android {
     }
 }
 
-// Rename APK output files to a friendly name (e.g. 101-104-debug.apk)
+// Rename APK output files to a friendly name (e.g. Cartiva-debug.apk)
 android.applicationVariants.all { variant ->
     variant.outputs.all { output ->
-        def newName = "101-104-${variant.buildType.name}.apk"
+        def newName = "Cartiva-${variant.buildType.name}.apk"
         outputFileName = newName
     }
 }

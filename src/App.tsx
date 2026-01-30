@@ -1223,19 +1223,48 @@ function App() {
   useEffect(() => {
     const restoreSession = async () => {
       try {
-        const raw = sessionStorage.getItem('app_session_v1');
-        if (raw) {
-          const parsed = JSON.parse(raw);
+        const SESSION_KEY = 'app_session_v1';
+        const PERSIST_KEY = 'app_session_persist_v1';
+
+        const tryApplySession = (parsed: any) => {
           if (parsed?.token) {
-            setAuthToken(String(parsed.token));
+            try { setAuthToken(String(parsed.token)); } catch { /* ignore */ }
           }
           if (parsed?.user && parsed?.role) {
             setCurrentUser(parsed.user);
             setUserRole(parsed.role);
-            
-            // For editor users, check if they have an active route before setting idle status
-            // Route restoration happens in a separate useEffect that triggers on currentUser change
-            // So we don't update team status here to avoid overwriting existing route data
+          }
+        };
+
+        // 1) Prefer sessionStorage (default: no "remember me")
+        const rawSession = sessionStorage.getItem(SESSION_KEY);
+        if (rawSession) {
+          const parsed = JSON.parse(rawSession);
+          tryApplySession(parsed);
+          return;
+        }
+
+        // 2) Fallback: 30-day "remember me" (localStorage with expiry)
+        const rawPersist = localStorage.getItem(PERSIST_KEY);
+        if (rawPersist) {
+          const parsed = JSON.parse(rawPersist);
+          const expiresAt = Number(parsed?.expiresAt ?? 0);
+          if (!expiresAt || Date.now() > expiresAt) {
+            try { localStorage.removeItem(PERSIST_KEY); } catch { /* ignore */ }
+            return;
+          }
+
+          tryApplySession(parsed);
+
+          // Mirror into sessionStorage for normal app flow.
+          try {
+            sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+              user: parsed?.user,
+              role: parsed?.role,
+              token: String(parsed?.token || ''),
+            }));
+          } catch {
+            // ignore
           }
         }
       } catch {
@@ -1301,6 +1330,24 @@ function App() {
           const raw = sessionStorage.getItem('app_session_v1');
           const existing = raw ? JSON.parse(raw) : {};
           sessionStorage.setItem('app_session_v1', JSON.stringify({ ...existing, user: nextUser, role }));
+        } catch {
+          // ignore
+        }
+
+        // If a persistent "remember me" session exists, keep it in sync too.
+        try {
+          const rawPersist = localStorage.getItem('app_session_persist_v1');
+          if (rawPersist) {
+            const parsedPersist = JSON.parse(rawPersist);
+            const expiresAt = Number(parsedPersist?.expiresAt ?? 0);
+            if (expiresAt && Date.now() <= expiresAt) {
+              localStorage.setItem('app_session_persist_v1', JSON.stringify({
+                ...parsedPersist,
+                user: nextUser,
+                role,
+              }));
+            }
+          }
         } catch {
           // ignore
         }
@@ -2333,7 +2380,7 @@ function App() {
     <>
       <VersionChecker />
       <Routes>
-        <Route path="/login" element={<LoginPage onLogin={async (user, token) => {
+        <Route path="/login" element={<LoginPage onLogin={async (user, token, rememberMe) => {
         // Accept 'admin', 'editor', 'viewer' (case-insensitive) or default to 'user'
         const r = String(user.role || '').toLowerCase();
         const role = r === 'admin' ? 'admin' : (r === 'editor' ? 'editor' : (r === 'viewer' ? 'viewer' : 'user'));
@@ -2343,6 +2390,15 @@ function App() {
         setCurrentUser(user);
         // persist session
         try { sessionStorage.setItem('app_session_v1', JSON.stringify({ user, role, token: String(token || '') })); } catch { /* ignore */ }
+        // optional: remember for 30 days
+        try {
+          if (rememberMe) {
+            const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+            localStorage.setItem('app_session_persist_v1', JSON.stringify({ user, role, token: String(token || ''), expiresAt }));
+          } else {
+            localStorage.removeItem('app_session_persist_v1');
+          }
+        } catch { /* ignore */ }
         pushActivity(user.username, 'Giriş yaptı');
 
         // Explicitly bootstrap activities after login.
@@ -2641,6 +2697,8 @@ function App() {
                         }
                         try { clearTrackingState(); } catch { /* ignore */ }
                         try { sessionStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
+                        try { localStorage.removeItem('app_session_persist_v1'); } catch { /* ignore */ }
+                        try { setAuthToken(null); } catch { /* ignore */ }
                         setUserRole(null);
                         setCurrentUser(null);
                         goToLogin(true);
@@ -3040,6 +3098,8 @@ function App() {
                         }
                         try { clearTrackingState(); } catch { /* ignore */ }
                         try { sessionStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
+                        try { localStorage.removeItem('app_session_persist_v1'); } catch { /* ignore */ }
+                        try { setAuthToken(null); } catch { /* ignore */ }
                         setUserRole(null);
                         setCurrentUser(null);
                         goToLogin(true);
