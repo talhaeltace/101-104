@@ -50,8 +50,8 @@ export const sendNotification = (title: string, options?: NotificationOptions): 
 
 // Location-specific notifications
 export const notifyNearLocation = (locationName: string): void => {
-  sendNotification('📍 Rota Uyarısı: 100m Kaldı', {
-    body: `Seçili rota kapsamında ${locationName} lokasyonuna yaklaşık 100m kaldı. Saha personeli adrese geldiğinde "Adrese Vardım" kaydırma alanını kullanarak varışını işaretleyebilir.`,
+  sendNotification('📍 Rota Uyarısı: 500m Kaldı', {
+    body: `Seçili rota kapsamında ${locationName} lokasyonuna yaklaşık 500m kaldı. Saha personeli adrese geldiğinde "Adrese Vardım" kaydırma alanını kullanarak varışını işaretleyebilir.`,
     tag: 'location-near'
   });
 };

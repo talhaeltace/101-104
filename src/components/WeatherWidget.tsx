@@ -135,19 +135,19 @@ export default function WeatherWidget({ selectedRegion, regions, variant = 'card
 
   if (variant === 'inline') {
     return (
-      <div className="flex items-center gap-2 text-xs text-gray-500">
-        <Icon className="w-4 h-4 text-gray-400" />
-        <span className="font-medium text-gray-600">{label}</span>
-        <span className="text-gray-400">•</span>
+      <div className="flex items-center gap-2 text-xs text-white whitespace-nowrap">
+        <Icon className="w-4 h-4 text-white/90" />
+        <span className="font-semibold">{label}</span>
+        <span className="text-white/70">•</span>
         {loading && !snapshot ? (
-          <span className="text-gray-400">Hava durumu yükleniyor…</span>
+          <span className="text-white/70">Yükleniyor…</span>
         ) : snapshot ? (
           <>
-            <span className="text-gray-600">{temp}°C</span>
-            <span className="text-gray-400">({desc})</span>
+            <span className="font-semibold">{temp}°C</span>
+            <span className="text-white/80">({desc})</span>
           </>
         ) : (
-          <span className="text-gray-400">Hava durumu yok</span>
+          <span className="text-white/70">—</span>
         )}
       </div>
     );

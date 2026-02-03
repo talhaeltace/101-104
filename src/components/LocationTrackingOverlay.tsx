@@ -61,12 +61,13 @@ const LocationTrackingOverlay: React.FC<LocationTrackingOverlayProps> = ({
     <div
       style={{
         position: 'fixed',
-        bottom: 0,
+        // Keep this above the fixed bottom navigation.
+        bottom: 'calc(92px + env(safe-area-inset-bottom))',
         left: 0,
         right: 0,
         zIndex: 9998,
         padding: '12px 16px',
-        paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
+        paddingBottom: '12px',
         backgroundColor: 'rgba(17,24,39,0.95)',
         backdropFilter: 'blur(8px)',
         boxShadow: '0 -4px 20px rgba(0,0,0,0.3)',

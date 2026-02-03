@@ -73,7 +73,7 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
   ];
 
   return (
-    <div className="fixed inset-0 z-[1200] bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true">
       <div className="bg-white w-full h-full overflow-hidden flex flex-col overscroll-contain">
         
         {/* Header */}
@@ -344,7 +344,10 @@ const LocationDetailsModal: React.FC<Props> = ({ location, isOpen, onClose, onEd
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+        <div
+          className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3"
+          style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}
+        >
           {canEditLocation && (
             <button 
               onClick={() => onEdit(location)} 

@@ -20,7 +20,7 @@ const haversine = (a: [number, number], b: [number, number]) => {
 export interface LocationTrackingState {
   currentLocation: Location | null;
   distanceToTarget: number | null;
-  isNearby: boolean; // within 100m
+  isNearby: boolean; // within proximity threshold
   arrivalTime: Date | null;
   isWorking: boolean; // user confirmed arrival
   workStartTime: Date | null;
@@ -28,7 +28,7 @@ export interface LocationTrackingState {
 
 interface UseLocationTrackingOptions {
   targetLocation: Location | null;
-  proximityThreshold?: number; // meters, default 100
+  proximityThreshold?: number; // meters, default 500
   userPosition: [number, number] | null; // Receive position from parent instead of watching internally
   testMode?: boolean; // Simulate GPS movement for testing
   initialWorkState?: { isWorking: boolean; workStartTime: Date | null }; // Restore work state from localStorage
@@ -36,7 +36,7 @@ interface UseLocationTrackingOptions {
 
 export const useLocationTracking = ({
   targetLocation,
-  proximityThreshold = 100,
+  proximityThreshold = 500,
   userPosition,
   testMode = false,
   initialWorkState
@@ -73,19 +73,19 @@ export const useLocationTracking = ({
       return;
     }
 
-    // Start at 300m away
-    const offset300m = 0.0027; // ~300m
+    // Start far enough away to be outside the proximity threshold
+    const offset800m = 0.0072; // ~800m
     const farPosition: [number, number] = [
-      targetLocation.coordinates[0] + offset300m,
+      targetLocation.coordinates[0] + offset800m,
       targetLocation.coordinates[1]
     ];
     setTestPosition(farPosition);
 
-    // After 10 seconds, move to 50m (nearby)
+    // After 10 seconds, move to within the threshold
     const timer1 = setTimeout(() => {
-      const offset50m = 0.00045; // ~50m
+      const offset200m = 0.0018; // ~200m
       const nearPosition: [number, number] = [
-        targetLocation.coordinates[0] + offset50m,
+        targetLocation.coordinates[0] + offset200m,
         targetLocation.coordinates[1]
       ];
       setTestPosition(nearPosition);

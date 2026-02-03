@@ -33,6 +33,8 @@ import MesaiTrackingPanel from './components/MesaiTrackingPanel';
 import MessagesOverlay from './components/MessagesOverlay';
 import AdminMessagesOverlay from './components/AdminMessagesOverlay';
 import LiveMapPanel from './components/LiveMapPanel';
+import { MobileBottomNav, type MobileTabKey } from './components/MobileBottomNav';
+import { MobileSheet } from './components/MobileSheet';
 import { updateTeamStatus, clearTeamStatus, getUserRoute, CompletedLocationInfo, calculateMinutesBetween } from './lib/teamStatus';
 import {
   saveTrackingState,
@@ -173,7 +175,7 @@ function App() {
 
   // Desktop sidebar UX: keep the nav within 100vh by collapsing heavy sections.
   const [activityFullscreenOpen, setActivityFullscreenOpen] = useState(false);
-  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState<boolean>(true);
+  // Desktop sidebar removed - all screens use unified header + bottom nav
 
   // Map locationId -> regionId for fast lookups
   const locationToRegionId = useMemo(() => {
@@ -937,7 +939,7 @@ function App() {
           {
             enableHighAccuracy: true,
             timeout: 8000,
-            // Keep this low so we get fresh-ish values for 100m detection
+            // Keep this low so we get fresh-ish values for 500m detection
             maximumAge: 2000
           }
         );
@@ -1052,28 +1054,8 @@ function App() {
     };
   }, []);
 
-  // Detect mobile / touch devices and force the mobile header layout (hamburger left)
-  const [forceMobileHeader, setForceMobileHeader] = useState(false);
-  const [isNarrow, setIsNarrow] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : true);
-  useEffect(() => {
-    const detect = () => {
-      const ua = typeof navigator !== 'undefined' ? (navigator.userAgent || '') : '';
-      const isMobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
-      const coarsePointer = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-      const maxTouch = typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 0;
-      setForceMobileHeader(isMobileUA || coarsePointer || !!maxTouch);
-      setIsNarrow(typeof window !== 'undefined' ? window.innerWidth < 768 : true);
-    };
-    detect();
-    window.addEventListener('resize', detect);
-    window.addEventListener('orientationchange', detect);
-    return () => {
-      window.removeEventListener('resize', detect);
-      window.removeEventListener('orientationchange', detect);
-    };
-  }, []);
-
-  const showMobileHeader = forceMobileHeader || isNarrow;
+  // Removed responsive detection - unified layout for all screens
+  const showMobileHeader = true; // Always use unified header + bottom nav
 
   const refreshPendingAcceptanceCount = useCallback(async () => {
     if (!currentUser || userRole !== 'admin') {
@@ -1212,11 +1194,10 @@ function App() {
     };
   }, []);
 
-  // Default: on desktop start with heavy panels collapsed to avoid vertical overflow.
+  // Desktop sidebar removed - unified layout
   useEffect(() => {
     if (!showMobileHeader) {
       setActivityFullscreenOpen(false);
-      setDesktopSidebarOpen(true);
     }
   }, [showMobileHeader]);
 
@@ -1375,7 +1356,8 @@ function App() {
   }, [currentUser]);
 
   // Mobile drawer state
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Drawer removed - using bottom nav instead
+  const [mobileSheet, setMobileSheet] = useState<'none' | 'management' | 'profile'>('none');
   const [statusFilters, setStatusFilters] = useState<Array<'active' | 'configured' | 'started' | 'installed' | 'installed_only' | 'accepted' | 'untouched' | 'todo' | 'missing' | 'card' | 'notes' | 'card_installed' | 'card_active' | 'rtu' | 'rtu_installed' | 'rtu_todo'>>([]);
 
   // Team panel state
@@ -1690,9 +1672,27 @@ function App() {
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      if (currentUser) {
+        try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
+        catch (e) { console.warn('pushActivity failed on logout', e); }
+      }
+      try { clearTrackingState(); } catch { /* ignore */ }
+      try { sessionStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
+      try { localStorage.removeItem('app_session_persist_v1'); } catch { /* ignore */ }
+      try { setAuthToken(null); } catch { /* ignore */ }
+      try { setMobileSheet('none'); } catch { /* ignore */ }
+      try { setIsMessagesOpen(false); } catch { /* ignore */ }
+    } finally {
+      setUserRole(null);
+      setCurrentUser(null);
+      goToLogin(true);
+    }
+  };
+
   // Handle route cancellation - preserves completed locations and stats
   const handleCancelRoute = async () => {
-    setIsTrackingRoute(false);
     setActiveRoute(null);
     setCurrentRouteIndex(0);
     setCurrentLegStartTime(null);
@@ -2287,8 +2287,6 @@ function App() {
       } catch {
         // ignore if modal state isn't available
       }
-      // close drawer if open (mobile)
-      try { setDrawerOpen(false); } catch { /* ignore */ }
     } else {
       console.warn('Could not find location for activity click:', name);
     }
@@ -2413,304 +2411,7 @@ function App() {
       }} />} />
       <Route path="/*" element={
         <RequireAuth>
-          <div
-            className={
-              `${showMobileHeader ? 'min-h-screen flex flex-col' : 'h-screen flex overflow-hidden'} ` +
-              'bg-gray-50'
-            }
-          >
-            {/* Desktop: left sidebar navigation (text-only). Mobile: keep compact top header + drawer. */}
-            {!showMobileHeader && desktopSidebarOpen && (
-              <aside className="w-80 shrink-0 bg-white border-r border-gray-200 shadow-sm sticky top-0 h-full">
-                <div className="h-full flex flex-col min-w-0">
-                  {/* Logo Area - Fixed */}
-                  <div className="shrink-0 flex items-center gap-3 p-4 pb-3 border-b border-gray-200">
-                    <div className="w-10 h-10 rounded-lg bg-blue-600 p-0.5 shadow-sm">
-                      <img src="/cartiva.png" alt="Cartiva" className="w-full h-full rounded-md object-cover" />
-                    </div>
-                    <div>
-                      <span className="text-lg font-bold text-gray-800 tracking-tight">Cartiva</span>
-                      <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">Saha Yönetim</div>
-                    </div>
-                  </div>
-
-                  {/* Scrollable Middle area */}
-                  <div className="flex-1 overflow-y-auto p-4 pt-3 min-w-0">
-                    {userCanView && (
-                      <div className="min-w-0">
-                        <div className="text-xs font-medium text-gray-500 mb-2">Bölge Seçimi</div>
-                        <div className="min-w-0">
-                          <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} />
-                          <WeatherWidget selectedRegion={selectedRegion} regions={locations} />
-                        </div>
-                      </div>
-                    )}
-
-                    {userRole === 'admin' && (
-                      <div className="mt-3">
-                        <button
-                          type="button"
-                          onClick={() => setActivityFullscreenOpen(true)}
-                          className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-                        >
-                          <span>Aktivite Geçmişi</span>
-                          <span className="text-xs font-medium text-gray-400">Aç</span>
-                        </button>
-                      </div>
-                    )}
-
-                    <div className="mt-3">
-                      <div className="text-xs font-medium text-gray-500 mb-1.5">Görünüm</div>
-                      <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setView('map')}
-                        className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${view === 'map' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-                      >
-                        Harita
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setView('list')}
-                        className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${view === 'list' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-                      >
-                        Liste
-                      </button>
-                      </div>
-                    </div>
-
-                    {canUseMessages && (
-                      <div className="mt-3">
-                        <div className="text-xs font-medium text-gray-500 mb-1.5">Mesajlar</div>
-                        <button
-                          type="button"
-                          onClick={() => setIsMessagesOpen(true)}
-                          className="relative w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                        >
-                          Mesajlar
-                          {unreadMessagesCount > 0 && (
-                            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-                              {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
-                            </span>
-                          )}
-                        </button>
-                      </div>
-                    )}
-
-                    {view === 'map' && userCanView && (
-                      <div className="mt-3">
-                        <div className="text-xs font-medium text-gray-500 mb-1.5">Harita Modu</div>
-                        <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setMapMode('lokasyon')}
-                          className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${mapMode === 'lokasyon' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-                        >
-                          Lokasyon modu
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMapMode('harita')}
-                          className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${mapMode === 'harita' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-                        >
-                          Harita modu
-                        </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {userCanExport && (
-                      <div className="mt-3">
-                        <div className="text-xs font-medium text-gray-500 mb-1.5">Dışa Aktar</div>
-                        <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={handleExportExcel}
-                          className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                        >
-                          Excel'e Aktar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleExportPDF}
-                          className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                        >
-                          PDF'e Aktar
-                        </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {(userCanCreate || userCanRoute || userCanTeamView || userRole === 'admin') && (
-                      <div className="mt-3">
-                        <div className="text-xs font-medium text-gray-500 mb-1.5">Yönetim</div>
-                        <div className="grid grid-cols-2 gap-1.5">
-                        {canViewLiveMap && (
-                          <button
-                            type="button"
-                            onClick={() => setIsLiveMapOpen(true)}
-                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                          >
-                            Canlı Harita
-                          </button>
-                        )}
-                        {userCanCreate && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const template: Location = {
-                                id: '',
-                                name: '',
-                                center: '',
-                                coordinates: [0, 0],
-                                brand: '',
-                                model: '',
-                                details: {
-                                  hasGPS: false,
-                                  hasRTU: false,
-                                  hasPanos: false,
-                                  isActive: false,
-                                  isConfigured: false,
-                                    isTwoDoorCardAccess: false,
-                                  equipment: {
-                                    securityFirewall: 0,
-                                    networkSwitch: 0,
-                                    rtuCount: 0,
-                                    gpsCardAntenna: 0,
-                                    rtuPanel: 0,
-                                    btpPanel: 0,
-                                    energyAnalyzer: 0,
-                                    ykgcCount: 0,
-                                    teiasRtuInstallation: 0,
-                                    indoorDomeCamera: 0,
-                                    networkVideoManagement: 0,
-                                    smartControlUnit: 0,
-                                    cardReader: 0,
-                                    networkRecordingUnit: 0,
-                                    accessControlSystem: 0,
-                                    transformerCenterType: ''
-                                  },
-                                  tags: ''
-                                }
-                              };
-                              setSelectedLocation(template);
-                              setIsCreateMode(true);
-                              setIsEditModalOpen(true);
-                            }}
-                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors"
-                          >
-                            Yeni Lokasyon
-                          </button>
-                        )}
-                        {userCanRoute && (
-                          <button
-                            type="button"
-                            onClick={() => setIsRouteModalOpen(true)}
-                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
-                          >
-                            Rota Oluştur
-                          </button>
-                        )}
-                        {currentUser && (userCanRoute || userRole === 'editor' || userRole === 'admin') && (
-                          <button
-                            type="button"
-                            onClick={() => setIsTasksPanelOpen(true)}
-                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                          >
-                            Görevler
-                          </button>
-                        )}
-                        {userCanTeamView && (
-                          <button
-                            type="button"
-                            onClick={() => setIsTeamPanelOpen(true)}
-                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                          >
-                            Ekip Durumu
-                          </button>
-                        )}
-                        {userRole === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={() => setIsMesaiTrackingOpen(true)}
-                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                          >
-                            Mesai Takip
-                          </button>
-                        )}
-                        {userRole === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={() => setIsAcceptanceApprovalsOpen(true)}
-                            className="relative w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                          >
-                            Kabul Onayları
-                            {pendingAcceptanceCount > 0 && (
-                              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-                                {pendingAcceptanceCount > 99 ? '99+' : pendingAcceptanceCount}
-                              </span>
-                            )}
-                          </button>
-                        )}
-                        {userRole === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={() => setIsAssignedTasksAdminOpen(true)}
-                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                          >
-                            Atanan Görevler
-                          </button>
-                        )}
-                        {userRole === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={() => setIsAdminPanelOpen(true)}
-                            className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
-                          >
-                            Admin Paneli
-                          </button>
-                        )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* User + Logout - Fixed at bottom */}
-                  <div className="shrink-0 p-4 pt-3 border-t border-gray-200 bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
-                        {(currentUser?.username ?? 'U').charAt(0).toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-gray-800 truncate">{currentUser?.username ?? ''}</div>
-                        <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
-                          {userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (currentUser) {
-                          try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
-                          catch (e) { console.warn('pushActivity failed on logout', e); }
-                        }
-                        try { clearTrackingState(); } catch { /* ignore */ }
-                        try { sessionStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
-                        try { localStorage.removeItem('app_session_persist_v1'); } catch { /* ignore */ }
-                        try { setAuthToken(null); } catch { /* ignore */ }
-                        setUserRole(null);
-                        setCurrentUser(null);
-                        goToLogin(true);
-                      }}
-                      className="mt-3 w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                    >
-                      Çıkış Yap
-                    </button>
-                  </div>
-                </div>
-              </aside>
-            )}
+          <div className="min-h-screen flex flex-col bg-gray-50">
 
             {/* Fullscreen Activity History (admin) */}
             {userRole === 'admin' && activityFullscreenOpen && (
@@ -2743,378 +2444,108 @@ function App() {
             )}
 
             <div className="flex-1 min-w-0 flex flex-col h-full">
-              {/* Desktop sidebar toggle: arrow on the edge (open: collapse, closed: expand) */}
-              {!showMobileHeader && (
-                <button
-                  type="button"
-                  onClick={() => setDesktopSidebarOpen(v => !v)}
-                  className={
-                    desktopSidebarOpen
-                      ? "fixed top-1/2 left-[calc(theme(spacing.80)-0rem)] z-[1200] -translate-y-1/2 w-9 h-14 rounded-l-none rounded-r-2xl bg-white border border-l-0 border-gray-200 shadow-sm hover:bg-gray-50 transition-colors flex items-center justify-center"
-                      : "fixed top-1/2 left-0 z-[1200] -translate-y-1/2 w-9 h-14 rounded-l-none rounded-r-2xl bg-white border border-l-0 border-gray-200 shadow-sm hover:bg-gray-50 transition-colors flex items-center justify-center"
-                  }
-                  title={desktopSidebarOpen ? 'Menüyü Kapat' : 'Menüyü Aç'}
-                  aria-label={desktopSidebarOpen ? 'Menüyü Kapat' : 'Menüyü Aç'}
-                >
-                  {desktopSidebarOpen ? (
-                    <svg className="w-5 h-5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M15 18l-6-6 6-6" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 18l6-6-6-6" />
-                    </svg>
-                  )}
-                </button>
-              )}
-              {showMobileHeader && (
-                <header className="fixed inset-x-0 top-0 z-[1000] bg-white border-b border-gray-200 shadow-sm transition-all duration-300" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-                  <div className="w-full px-4 sm:px-6 lg:px-8">
-                    <div className="flex items-center justify-between h-16 sm:h-20">
-                      <div className="flex items-center gap-4 shrink-0">
-                        <div className="flex items-center mr-2">
-                          <button
-                            onClick={() => setDrawerOpen(true)}
-                            className="inline-flex items-center justify-center p-2 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-300"
-                            aria-label="Menü"
-                            title="Menü"
-                          >
-                            <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <line x1="3" y1="12" x2="21" y2="12"></line>
-                              <line x1="3" y1="6" x2="21" y2="6"></line>
-                              <line x1="3" y1="18" x2="21" y2="18"></line>
-                            </svg>
-                          </button>
-                        </div>
+              {/* Unified header for all screen sizes */}
+              <header className="fixed inset-x-0 top-0 z-[1000] bg-white shadow-sm" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+                {/* Main Header Row */}
+                <div className="w-full px-3 sm:px-4 border-b border-gray-200">
+                  <div className="flex items-center justify-between gap-3 sm:gap-4 h-14">
+                    {/* Left: Logo + Brand */}
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 p-0.5 shadow-md">
+                        <img src="/cartiva.png" alt="Cartiva" className="w-full h-full rounded-lg object-cover" />
                       </div>
-
-                      <div className="flex-1 flex justify-center items-center min-w-0 px-2 sm:px-4">
-                        {userCanView ? (
-                          <div className="w-full max-w-md min-w-0">
-                            <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} dropdownOffsetClass="mt-12" />
-                          </div>
-                        ) : (
-                          <div className="text-sm sm:text-base font-semibold text-gray-800">Cartiva</div>
-                        )}
-                      </div>
-
-                      {canViewLiveMap && (
-                        <div className="flex items-center shrink-0">
-                          <button
-                            onClick={() => setIsLiveMapOpen(true)}
-                            className="px-2 sm:px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm transition-all duration-200 text-xs sm:text-sm font-medium whitespace-nowrap"
-                            title="Canlı Harita"
-                          >
-                            <span className="hidden sm:inline">Canlı Harita</span>
-                            <svg className="w-5 h-5 sm:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <circle cx="12" cy="10" r="3"/>
-                              <path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8Z"/>
-                            </svg>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Mini sub-header: Weather (separate row under the main header) */}
-                  {userCanView && (
-                    <div className="border-t border-gray-200 bg-white">
-                      <div className="w-full px-4 sm:px-6 lg:px-8">
-                        <div className="h-10 flex items-center justify-center">
-                          <WeatherWidget selectedRegion={selectedRegion} regions={locations} variant="inline" />
-                        </div>
+                      <div className="flex flex-col">
+                        <span className="text-base font-bold text-gray-900 leading-none">Cartiva</span>
+                        <span className="text-[10px] text-gray-500 font-medium">Saha Yönetim</span>
                       </div>
                     </div>
-                  )}
-                </header>
-              )}
 
-            {/* Drawer for mobile containing all actions */}
-            {showMobileHeader && drawerOpen && (
-              <>
-                <div
-                  className="fixed inset-0 bg-black/30 z-[1100]"
-                  onClick={() => setDrawerOpen(false)}
-                  aria-hidden
-                />
-                <aside className="fixed top-0 left-0 z-[1110] h-full w-72 bg-white shadow-xl flex flex-col">
-                  {/* Logo Header - Fixed */}
-                  <div className="shrink-0 flex items-center justify-between p-4 pb-3 border-b border-gray-200">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-blue-600 p-0.5 shadow-sm">
-                        <img src="/cartiva.png" alt="Cartiva" className="w-full h-full rounded-md object-cover" />
-                      </div>
-                      <div>
-                        <span className="text-lg font-bold text-gray-800 tracking-tight">Cartiva</span>
-                        <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">Saha Yönetim</div>
-                      </div>
-                    </div>
-                    <button onClick={() => setDrawerOpen(false)} className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors">
-                      <svg className="w-5 h-5 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 011.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                  </div>
-
-                  {/* Scrollable Content */}
-                  <div className="flex-1 overflow-y-auto p-4 pt-3 space-y-3">
-                    {canUseMessages && (
-                      <div>
-                        <div className="text-xs font-medium text-gray-500 mb-1.5">Mesajlar</div>
-                        <button
-                          type="button"
-                          onClick={() => { setIsMessagesOpen(true); setDrawerOpen(false); }}
-                          className="relative w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                        >
-                          Mesajlar
-                          {unreadMessagesCount > 0 && (
-                            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-                              {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
-                            </span>
-                          )}
-                        </button>
-                      </div>
-                    )}
-
-                    {userRole === 'admin' && (
-                      <div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActivityFullscreenOpen(true);
-                            setDrawerOpen(false);
-                          }}
-                          className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-                        >
-                          <span>Aktivite Geçmişi</span>
-                          <span className="text-xs font-medium text-gray-400">Aç</span>
-                        </button>
-                      </div>
-                    )}
-
-                    {userCanExport && (
-                      <div>
-                        <div className="text-xs font-medium text-gray-500 mb-1.5">Dışa Aktar</div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => { handleExportExcel(); setDrawerOpen(false); }}
-                            className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                          >
-                            Excel'e Aktar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { handleExportPDF(); setDrawerOpen(false); }}
-                            className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                          >
-                            PDF'e Aktar
-                          </button>
+                    {/* Center: Region Selector */}
+                    {userCanView && (
+                      <div className="hidden sm:flex flex-1 justify-center min-w-0 max-w-xs">
+                        <div className="w-full min-w-0">
+                          <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} />
                         </div>
                       </div>
                     )}
 
-                    <div>
-                      <div className="text-xs font-medium text-gray-500 mb-1.5">Görünüm</div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => { setView('map'); setDrawerOpen(false); }}
-                          className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${view === 'map' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-                        >
-                          Harita
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { setView('list'); setDrawerOpen(false); }}
-                          className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${view === 'list' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
-                        >
-                          Liste
-                        </button>
-                      </div>
-                    </div>
-
-                    {(userCanCreate || userCanRoute || userCanTeamView || userRole === 'admin') && (
-                      <div>
-                        <div className="text-xs font-medium text-gray-500 mb-1.5">Yönetim</div>
-                        <div className="grid grid-cols-2 gap-1.5">
-                          {canViewLiveMap && (
-                            <button
-                              type="button"
-                              onClick={() => { setIsLiveMapOpen(true); setDrawerOpen(false); }}
-                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                            >
-                              Canlı Harita
-                            </button>
-                          )}
-                          {userCanCreate && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const template: Location = {
-                                  id: '',
-                                  name: '',
-                                  center: '',
-                                  coordinates: [0, 0],
-                                  brand: '',
-                                  model: '',
-                                  details: {
-                                    hasGPS: false,
-                                    hasRTU: false,
-                                    hasPanos: false,
-                                    isActive: false,
-                                    isConfigured: false,
-                                      isTwoDoorCardAccess: false,
-                                    equipment: {
-                                      securityFirewall: 0,
-                                      networkSwitch: 0,
-                                      rtuCount: 0,
-                                      gpsCardAntenna: 0,
-                                      rtuPanel: 0,
-                                      btpPanel: 0,
-                                      energyAnalyzer: 0,
-                                      ykgcCount: 0,
-                                      teiasRtuInstallation: 0,
-                                      indoorDomeCamera: 0,
-                                      networkVideoManagement: 0,
-                                      smartControlUnit: 0,
-                                      cardReader: 0,
-                                      networkRecordingUnit: 0,
-                                      accessControlSystem: 0,
-                                      transformerCenterType: ''
-                                    },
-                                    tags: ''
-                                  }
-                                };
-                                setSelectedLocation(template);
-                                setIsCreateMode(true);
-                                setIsEditModalOpen(true);
-                                setDrawerOpen(false);
-                              }}
-                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors"
-                            >
-                              Yeni Lokasyon
-                            </button>
-                          )}
-
-                          {userCanRoute && (
-                            <button
-                              type="button"
-                              onClick={() => { setIsRouteModalOpen(true); setDrawerOpen(false); }}
-                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
-                            >
-                              Rota Oluştur
-                            </button>
-                          )}
-
-                          {currentUser && (userCanRoute || userRole === 'editor' || userRole === 'admin') && (
-                            <button
-                              type="button"
-                              onClick={() => { setIsTasksPanelOpen(true); setDrawerOpen(false); }}
-                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                            >
-                              Görevler
-                            </button>
-                          )}
-                        
-                          {userCanTeamView && (
-                            <button
-                              type="button"
-                              onClick={() => { setIsTeamPanelOpen(true); setDrawerOpen(false); }}
-                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                            >
-                              Ekip Durumu
-                            </button>
-                          )}
-
-                          {userRole === 'admin' && (
-                            <button
-                              type="button"
-                              onClick={() => { setIsMesaiTrackingOpen(true); setDrawerOpen(false); }}
-                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                            >
-                              Mesai Takip
-                            </button>
-                          )}
-
-                          {userRole === 'admin' && (
-                            <button
-                              type="button"
-                              onClick={() => { setIsAcceptanceApprovalsOpen(true); setDrawerOpen(false); }}
-                              className="relative w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                            >
-                              Kabul Onayları
-                              {pendingAcceptanceCount > 0 && (
-                                <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
-                                  {pendingAcceptanceCount > 99 ? '99+' : pendingAcceptanceCount}
-                                </span>
-                              )}
-                            </button>
-                          )}
-
-                          {userRole === 'admin' && (
-                            <button
-                              type="button"
-                              onClick={() => { setIsAssignedTasksAdminOpen(true); setDrawerOpen(false); }}
-                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                            >
-                              Atanan Görevler
-                            </button>
-                          )}
-
-                          {userRole === 'admin' && (
-                            <button
-                              type="button"
-                              onClick={() => { setIsAdminPanelOpen(true); setDrawerOpen(false); }}
-                              className="w-full px-2 py-1.5 rounded-lg text-xs font-medium border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
-                            >
-                              Admin Paneli
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* User + Logout - Fixed at bottom */}
-                  <div className="shrink-0 p-4 pt-3 border-t border-gray-200 bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
+                    {/* Right: User Avatar */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center text-white font-bold text-sm shadow-md">
                         {(currentUser?.username ?? 'U').charAt(0).toUpperCase()}
                       </div>
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-gray-800 truncate">{currentUser?.username ?? ''}</div>
-                        <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+                      <div className="hidden lg:flex flex-col min-w-0">
+                        <div className="text-xs font-semibold text-gray-900 truncate leading-none">
+                          {currentUser?.username ?? 'Kullanıcı'}
+                        </div>
+                        <div className="text-[10px] text-gray-500 font-medium">
                           {userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}
                         </div>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (currentUser) {
-                          try { await pushActivity(currentUser.username, 'Çıkış yaptı'); }
-                          catch (e) { console.warn('pushActivity failed on drawer logout', e); }
-                        }
-                        try { clearTrackingState(); } catch { /* ignore */ }
-                        try { sessionStorage.removeItem('app_session_v1'); } catch { /* ignore */ }
-                        try { localStorage.removeItem('app_session_persist_v1'); } catch { /* ignore */ }
-                        try { setAuthToken(null); } catch { /* ignore */ }
-                        setUserRole(null);
-                        setCurrentUser(null);
-                        goToLogin(true);
-                      }}
-                      className="mt-3 w-full px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                    >
-                      Çıkış Yap
-                    </button>
                   </div>
-                </aside>
-              </>
-            )}
+                </div>
 
-            {/* main: pad top only on mobile (fixed header). Desktop uses sidebar layout. */}
-            <main ref={mainScrollRef} className={`${showMobileHeader ? 'pt-28 sm:pt-32' : 'pt-6'} flex-1 overflow-y-auto w-full px-4 sm:px-6 lg:px-8 pb-20`}>
+                {/* Scrolling Ticker Bar - TEİAŞ style */}
+                <div className="w-full bg-gradient-to-r from-blue-600 via-blue-700 to-blue-600 overflow-hidden">
+                  <div className="flex items-center h-10 gap-6" style={{
+                    animation: 'scroll-left 30s linear infinite',
+                  }}>
+                    <style dangerouslySetInnerHTML={{
+                      __html: `
+                        @keyframes scroll-left {
+                          0% { transform: translateX(0); }
+                          100% { transform: translateX(-50%); }
+                        }
+                      `
+                    }} />
+                    {/* Duplicate content for seamless loop */}
+                    {[1, 2].map((loop) => (
+                      <div key={loop} className="flex items-center gap-6 shrink-0">
+                        <div className="flex items-center gap-2 text-white">
+                          <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                          <span className="text-xs font-semibold whitespace-nowrap">Toplam Lokasyon: {allLocations.length}</span>
+                        </div>
+                        <div className="w-px h-5 bg-blue-400" />
+                        <div className="flex items-center gap-2 text-white">
+                          <span className="text-xs font-semibold whitespace-nowrap">Seçili Bölge: {selectedRegion === 0 ? 'Tüm Bölgeler' : (locations.find(r => r.id === selectedRegion)?.name || '—')}</span>
+                        </div>
+                        <div className="w-px h-5 bg-blue-400" />
+                        {userCanView && (
+                          <>
+                            <div className="flex items-center gap-2 text-white scale-90">
+                              <WeatherWidget selectedRegion={selectedRegion} regions={locations} variant="inline" />
+                            </div>
+                            <div className="w-px h-5 bg-blue-400" />
+                          </>
+                        )}
+                        <div className="flex items-center gap-2 text-white">
+                          <span className="text-xs font-semibold">Bugün: {new Date().toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
+                        </div>
+                        <div className="w-px h-4 bg-blue-400" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Mobile Region Selector Row */}
+                {userCanView && (
+                  <div className="sm:hidden w-full px-3 py-2 bg-gray-50 border-b border-gray-200">
+                    <RegionSelector selectedRegion={selectedRegion} onRegionChange={setSelectedRegion} />
+                  </div>
+                )}
+              </header>
+
+              {/* Drawer removed - using bottom nav instead */}
+
+            {/* main: unified padding for header + bottom nav */}
+            <main
+              ref={mainScrollRef}
+              className="pt-16 pb-24 flex-1 overflow-y-auto w-full px-4 sm:px-6 lg:px-8"
+              style={{ 
+                paddingTop: userCanView ? 'calc(3.5rem + 2.5rem + 2.5rem + env(safe-area-inset-top))' : 'calc(3.5rem + 2.5rem + env(safe-area-inset-top))'
+              }}
+            >
               {userCanView && (
                 <div className="mb-4">
                   <div className="grid grid-cols-1 gap-4">
@@ -3264,6 +2695,7 @@ function App() {
                   <div className="bg-white rounded-lg shadow-md border border-gray-200 h-[600px]">
                     <LocationList
                       locations={currentLocations}
+                      regions={locations}
                       onLocationSelect={handleLocationSelect}
                       onShowDetails={handleShowDetails}
                       onLocationDoubleClick={(location) => {
@@ -3469,6 +2901,255 @@ function App() {
                 />
               )}
             </main>
+
+            {currentUser && (
+              <>
+                <MobileBottomNav
+                  activeTab={((): MobileTabKey => {
+                    if (mobileSheet === 'management') return 'management';
+                    if (mobileSheet === 'profile') return 'profile';
+                    if (isMessagesOpen) return 'messages';
+                    return view === 'list' ? 'list' : 'map';
+                  })()}
+                  showMessagesTab={!!canUseMessages}
+                  unreadMessagesCount={unreadMessagesCount}
+                  onSelectTab={(tab) => {
+                    if (tab === 'map' || tab === 'list') {
+                      setMobileSheet('none');
+                      setIsMessagesOpen(false);
+                      setView(tab);
+                      return;
+                    }
+
+                    if (tab === 'messages') {
+                      if (!canUseMessages) return;
+                      setMobileSheet('none');
+                      setIsMessagesOpen(true);
+                      return;
+                    }
+
+                    if (tab === 'management') {
+                      setIsMessagesOpen(false);
+                      setMobileSheet((prev) => (prev === 'management' ? 'none' : 'management'));
+                      return;
+                    }
+
+                    if (tab === 'profile') {
+                      setIsMessagesOpen(false);
+                      setMobileSheet((prev) => (prev === 'profile' ? 'none' : 'profile'));
+                    }
+                  }}
+                />
+
+                <MobileSheet
+                  open={mobileSheet === 'management'}
+                  title="Yönetim"
+                  onClose={() => setMobileSheet('none')}
+                >
+                  <div className="grid grid-cols-2 gap-3">
+                    {canViewLiveMap && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileSheet('none');
+                          setIsLiveMapOpen(true);
+                        }}
+                        className="rounded-2xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50 active:scale-[0.99] transition"
+                      >
+                        <div className="text-sm font-semibold text-gray-900">Canlı Harita</div>
+                        <div className="mt-1 text-xs text-gray-500">Ekip konumları</div>
+                      </button>
+                    )}
+
+                    {userCanRoute && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileSheet('none');
+                          setIsRouteModalOpen(true);
+                        }}
+                        className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-left text-blue-800 hover:bg-blue-100 active:scale-[0.99] transition"
+                      >
+                        <div className="text-sm font-semibold">Rota Oluştur</div>
+                        <div className="mt-1 text-xs opacity-80">Planlama</div>
+                      </button>
+                    )}
+
+                    {currentUser && (userCanRoute || userRole === 'editor' || userRole === 'admin') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileSheet('none');
+                          setIsTasksPanelOpen(true);
+                        }}
+                        className="rounded-2xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50 active:scale-[0.99] transition"
+                      >
+                        <div className="text-sm font-semibold text-gray-900">Görevler</div>
+                        <div className="mt-1 text-xs text-gray-500">Atama ve takip</div>
+                      </button>
+                    )}
+
+                    {userCanTeamView && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileSheet('none');
+                          setIsTeamPanelOpen(true);
+                        }}
+                        className="rounded-2xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50 active:scale-[0.99] transition"
+                      >
+                        <div className="text-sm font-semibold text-gray-900">Ekip Durumu</div>
+                        <div className="mt-1 text-xs text-gray-500">Canlı durum</div>
+                      </button>
+                    )}
+
+                    {userCanCreate && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const template: Location = {
+                            id: '',
+                            name: '',
+                            center: '',
+                            coordinates: [0, 0],
+                            brand: '',
+                            model: '',
+                            details: {
+                              hasGPS: false,
+                              hasRTU: false,
+                              hasPanos: false,
+                              isActive: false,
+                              isConfigured: false,
+                              isTwoDoorCardAccess: false,
+                              equipment: {
+                                securityFirewall: 0,
+                                networkSwitch: 0,
+                                rtuCount: 0,
+                                gpsCardAntenna: 0,
+                                rtuPanel: 0,
+                                btpPanel: 0,
+                                energyAnalyzer: 0,
+                                ykgcCount: 0,
+                                teiasRtuInstallation: 0,
+                                indoorDomeCamera: 0,
+                                networkVideoManagement: 0,
+                                smartControlUnit: 0,
+                                cardReader: 0,
+                                networkRecordingUnit: 0,
+                                accessControlSystem: 0,
+                                transformerCenterType: ''
+                              },
+                              tags: ''
+                            }
+                          };
+                          setSelectedLocation(template);
+                          setIsCreateMode(true);
+                          setIsEditModalOpen(true);
+                          setMobileSheet('none');
+                        }}
+                        className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left text-amber-800 hover:bg-amber-100 active:scale-[0.99] transition"
+                      >
+                        <div className="text-sm font-semibold">Yeni Lokasyon</div>
+                        <div className="mt-1 text-xs opacity-80">Oluştur</div>
+                      </button>
+                    )}
+
+                    {userCanExport && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileSheet('none');
+                            handleExportExcel();
+                          }}
+                          className="rounded-2xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50 active:scale-[0.99] transition"
+                        >
+                          <div className="text-sm font-semibold text-gray-900">Excel'e Aktar</div>
+                          <div className="mt-1 text-xs text-gray-500">Dışa Aktar</div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileSheet('none');
+                            handleExportPDF();
+                          }}
+                          className="rounded-2xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50 active:scale-[0.99] transition"
+                        >
+                          <div className="text-sm font-semibold text-gray-900">PDF'e Aktar</div>
+                          <div className="mt-1 text-xs text-gray-500">Dışa Aktar</div>
+                        </button>
+                      </>
+                    )}
+
+                    {userRole === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileSheet('none');
+                          setIsAcceptanceApprovalsOpen(true);
+                        }}
+                        className="rounded-2xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50 active:scale-[0.99] transition"
+                      >
+                        <div className="text-sm font-semibold text-gray-900">Kabul Onayları</div>
+                        <div className="mt-1 text-xs text-gray-500">Bekleyen: {pendingAcceptanceCount}</div>
+                      </button>
+                    )}
+
+                    {userRole === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileSheet('none');
+                          setIsAdminPanelOpen(true);
+                        }}
+                        className="rounded-2xl border border-red-200 bg-red-50 p-4 text-left text-red-800 hover:bg-red-100 active:scale-[0.99] transition"
+                      >
+                        <div className="text-sm font-semibold">Admin Paneli</div>
+                        <div className="mt-1 text-xs opacity-80">Ayarlar</div>
+                      </button>
+                    )}
+
+                    {userRole === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileSheet('none');
+                          setActivityFullscreenOpen(true);
+                        }}
+                        className="rounded-2xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50 active:scale-[0.99] transition"
+                      >
+                        <div className="text-sm font-semibold text-gray-900">Aktiviteler</div>
+                        <div className="mt-1 text-xs text-gray-500">Geçmiş</div>
+                      </button>
+                    )}
+                  </div>
+                </MobileSheet>
+
+                <MobileSheet
+                  open={mobileSheet === 'profile'}
+                  title="Hesap"
+                  onClose={() => setMobileSheet('none')}
+                >
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                      <div className="text-sm font-semibold text-gray-900">{currentUser?.username ?? 'Kullanıcı'}</div>
+                      <div className="mt-1 text-xs text-gray-500">
+                        {userRole === 'admin' ? 'Yönetici' : userRole === 'editor' ? 'Editör' : userRole === 'viewer' ? 'İzleyici' : 'Kullanıcı'}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleLogout}
+                      className="w-full rounded-2xl border border-red-200 bg-red-50 p-4 text-left text-red-800 hover:bg-red-100 active:scale-[0.99] transition"
+                    >
+                      <div className="text-sm font-semibold">Çıkış Yap</div>
+                      <div className="mt-1 text-xs opacity-80">Oturumu kapat</div>
+                    </button>
+                  </div>
+                </MobileSheet>
+              </>
+            )}
             </div>
           </div>
         </RequireAuth>
