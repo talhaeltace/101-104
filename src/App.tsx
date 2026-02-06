@@ -56,7 +56,9 @@ function App() {
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
   const [focusLocation, setFocusLocation] = useState<Location | null>(null);
   const [view, setView] = useState<'map' | 'list'>('map');
-  const [mapMode, setMapMode] = useState<'lokasyon' | 'harita'>('lokasyon');
+  const [mapMode, setMapMode] = useState<'lokasyon' | 'harita' | 'uydu' | 'koyu'>('lokasyon');
+  // Inline SVG map coloring level (1: status, 2: base Turkey palette, 3: percentage bands)
+  const [regionViewLevel, setRegionViewLevel] = useState<1 | 2 | 3>(1);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [detailsModalLocation, setDetailsModalLocation] = useState<Location | null>(null);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
@@ -279,7 +281,12 @@ function App() {
       const s = JSON.parse(raw);
       if (s && typeof s.selectedRegion === 'number') setSelectedRegion(s.selectedRegion);
       if (s && (s.view === 'map' || s.view === 'list')) setView(s.view);
-      if (s && (s.mapMode === 'lokasyon' || s.mapMode === 'harita')) setMapMode(s.mapMode);
+      if (s && (s.mapMode === 'lokasyon' || s.mapMode === 'harita' || s.mapMode === 'uydu' || s.mapMode === 'koyu')) {
+        setMapMode(s.mapMode);
+      }
+      if (s && (s.regionViewLevel === 1 || s.regionViewLevel === 2 || s.regionViewLevel === 3)) {
+        setRegionViewLevel(s.regionViewLevel);
+      }
     } catch {
       // ignore
     }
@@ -294,6 +301,7 @@ function App() {
             selectedRegion,
             view,
             mapMode,
+            regionViewLevel,
             savedAt: new Date().toISOString()
           })
         );
@@ -302,7 +310,7 @@ function App() {
       }
     }, 250);
     return () => window.clearTimeout(t);
-  }, [mapMode, selectedRegion, view]);
+  }, [mapMode, regionViewLevel, selectedRegion, view]);
 
   // Initial work state for restoring from localStorage
   const [initialWorkState, setInitialWorkState] = useState<{ isWorking: boolean; workStartTime: Date | null } | undefined>(undefined);
@@ -2558,12 +2566,52 @@ function App() {
               {userCanView ? (
                 view === 'map' ? (
                   <div className="space-y-4">
-                    <div className="flex items-center justify-end">
-                      <div className="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800 p-1 shadow-lg">
+                    <div className="flex items-center justify-end gap-2 flex-wrap">
+                      {mapMode === 'lokasyon' && (
+                        <div className="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800 p-1 shadow-lg gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setRegionViewLevel(1)}
+                            className={`px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                              regionViewLevel === 1
+                                ? 'bg-emerald-600 text-white'
+                                : 'text-slate-300 hover:bg-slate-700'
+                            }`}
+                            title="1: Duruma göre (eski görünüm)"
+                          >
+                            1
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRegionViewLevel(2)}
+                            className={`px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                              regionViewLevel === 2
+                                ? 'bg-emerald-600 text-white'
+                                : 'text-slate-300 hover:bg-slate-700'
+                            }`}
+                            title="2: Türkiye normal renkleri"
+                          >
+                            2
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRegionViewLevel(3)}
+                            className={`px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                              regionViewLevel === 3
+                                ? 'bg-emerald-600 text-white'
+                                : 'text-slate-300 hover:bg-slate-700'
+                            }`}
+                            title="3: Yüzdelik dağılım (dikey bantlar)"
+                          >
+                            3
+                          </button>
+                        </div>
+                      )}
+                      <div className="inline-flex flex-wrap items-center rounded-lg border border-slate-700 bg-slate-800 p-1 shadow-lg gap-1">
                         <button
                           type="button"
                           onClick={() => setMapMode('lokasyon')}
-                          className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                          className={`px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
                             mapMode === 'lokasyon'
                               ? 'bg-blue-600 text-white'
                               : 'text-slate-300 hover:bg-slate-700'
@@ -2574,13 +2622,35 @@ function App() {
                         <button
                           type="button"
                           onClick={() => setMapMode('harita')}
-                          className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                          className={`px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
                             mapMode === 'harita'
                               ? 'bg-blue-600 text-white'
                               : 'text-slate-300 hover:bg-slate-700'
                           }`}
                         >
                           Harita modu
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMapMode('uydu')}
+                          className={`px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                            mapMode === 'uydu'
+                              ? 'bg-blue-600 text-white'
+                              : 'text-slate-300 hover:bg-slate-700'
+                          }`}
+                        >
+                          Uydu modu
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMapMode('koyu')}
+                          className={`px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                            mapMode === 'koyu'
+                              ? 'bg-blue-600 text-white'
+                              : 'text-slate-300 hover:bg-slate-700'
+                          }`}
+                        >
+                          Koyu harita
                         </button>
                       </div>
                     </div>
@@ -2606,6 +2676,8 @@ function App() {
                           calculateDistance={calculateDistance}
                           followMemberLocation={followMember}
                           useInlineSvg={mapMode === 'lokasyon'}
+                          regionViewLevel={regionViewLevel}
+                          tileStyle={mapMode === 'uydu' ? 'satellite' : mapMode === 'koyu' ? 'dark' : 'osm'}
                           viewRestricted={!userCanView}
                           hideSummaryOverlay={true}
                         />
@@ -3092,6 +3164,20 @@ function App() {
                       >
                         <div className="text-sm font-semibold text-gray-900">Kabul Onayları</div>
                         <div className="mt-1 text-xs text-gray-500">Bekleyen: {pendingAcceptanceCount}</div>
+                      </button>
+                    )}
+
+                    {userRole === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileSheet('none');
+                          setIsMesaiTrackingOpen(true);
+                        }}
+                        className="rounded-2xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50 active:scale-[0.99] transition"
+                      >
+                        <div className="text-sm font-semibold text-gray-900">Mesai Takip</div>
+                        <div className="mt-1 text-xs text-gray-500">Rapor</div>
                       </button>
                     )}
 

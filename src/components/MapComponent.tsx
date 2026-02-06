@@ -10,6 +10,11 @@ interface MapComponentProps {
   locations: Location[]; // markers to show (current view)
   regions?: { id: number; name: string; locations: Location[] }[]; // all regions for polygon rendering
   selectedRegion: number;
+  // Inline SVG region coloring detail level (only used when useInlineSvg is true).
+  // 1: current dominant-status coloring
+  // 2: original "Turkey normal" SVG palette
+  // 3: vertical percentage distribution per region
+  regionViewLevel?: 1 | 2 | 3;
   // Regions on the inline SVG that should pulse green to indicate recent work.
   // Multiple regions can pulse at the same time (e.g., last work per user).
   activeWorkRegionIds?: number[] | null;
@@ -28,6 +33,8 @@ interface MapComponentProps {
   // Optional: show the inline SVG map instead of Leaflet tiles.
   // Default is false (Leaflet).
   useInlineSvg?: boolean;
+  // Leaflet base layer style (ignored when useInlineSvg is true).
+  tileStyle?: 'osm' | 'dark' | 'satellite';
   // When true, hide completion overlay/legend and show a neutral
   // "all green" map without per-region completion colors.
   viewRestricted?: boolean;
@@ -40,6 +47,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
   locations,
   regions,
   selectedRegion,
+  regionViewLevel = 1,
   activeWorkRegionIds = null,
   onDismissActiveWorkRegion,
   onLocationSelect,
@@ -53,6 +61,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
   followMemberLocation = null,
   teamLocations = null,
   useInlineSvg = false,
+  tileStyle = 'osm',
   viewRestricted = false,
   hideSummaryOverlay = false
 }) => {
@@ -70,6 +79,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
   const routeLineRef = useRef<any>(null);
   const routeMarkersRef = useRef<any[]>([]);
   const userMarkerRef = useRef<any>(null); // User location marker
+  const baseTileLayerRef = useRef<any>(null);
   const followMarkerRef = useRef<any>(null);
   const teamMarkersRef = useRef<Map<string, any>>(new Map());
   // Live map follow: center only once per followed member, then never auto-pan.
@@ -375,10 +385,49 @@ const MapComponent: React.FC<MapComponentProps> = ({
         // ignore
       }
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors',
-        maxZoom: 18,
-      }).addTo(mapInstance.current);
+      const addBaseLayer = (style: MapComponentProps['tileStyle']) => {
+        try {
+          if (baseTileLayerRef.current) {
+            try { baseTileLayerRef.current.remove(); } catch { /* ignore */ }
+            baseTileLayerRef.current = null;
+          }
+
+          if (!mapInstance.current) return;
+
+          if (style === 'satellite') {
+            baseTileLayerRef.current = L.tileLayer(
+              'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+              {
+                attribution: 'Tiles © Esri — Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+                maxZoom: 19,
+              }
+            ).addTo(mapInstance.current);
+            return;
+          }
+
+          if (style === 'dark') {
+            baseTileLayerRef.current = L.tileLayer(
+              'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+              {
+                attribution: '© OpenStreetMap contributors © CARTO',
+                maxZoom: 19,
+                subdomains: 'abcd',
+              }
+            ).addTo(mapInstance.current);
+            return;
+          }
+
+          // Default: OSM
+          baseTileLayerRef.current = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 18,
+          }).addTo(mapInstance.current);
+        } catch {
+          // ignore
+        }
+      };
+
+      addBaseLayer(tileStyle);
 
       // Default viewport: show all Turkey (not Istanbul).
       // Only do this once per map instance so marker updates don't re-fit.
@@ -447,6 +496,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
         try { window.clearTimeout(invalidateSizeTimeoutRef.current); } catch { /* ignore */ }
         invalidateSizeTimeoutRef.current = null;
       }
+
+      if (baseTileLayerRef.current) {
+        try { baseTileLayerRef.current.remove?.(); } catch { /* ignore */ }
+        baseTileLayerRef.current = null;
+      }
       if (mapInstance.current) {
         try {
           mapInstance.current.off('dragstart');
@@ -461,6 +515,51 @@ const MapComponent: React.FC<MapComponentProps> = ({
       setMapReady(false);
     };
   }, [useInlineSvg, mapInitNonce]);
+
+  // Switch Leaflet base layer style without re-initializing the whole map.
+  useEffect(() => {
+    if (useInlineSvg) return;
+    if (!mapReady || !mapInstance.current) return;
+    const L = leafletRef.current;
+    if (!L) return;
+
+    try {
+      if (baseTileLayerRef.current) {
+        try { baseTileLayerRef.current.remove(); } catch { /* ignore */ }
+        baseTileLayerRef.current = null;
+      }
+
+      if (tileStyle === 'satellite') {
+        baseTileLayerRef.current = L.tileLayer(
+          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          {
+            attribution: 'Tiles © Esri — Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+            maxZoom: 19,
+          }
+        ).addTo(mapInstance.current);
+        return;
+      }
+
+      if (tileStyle === 'dark') {
+        baseTileLayerRef.current = L.tileLayer(
+          'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+          {
+            attribution: '© OpenStreetMap contributors © CARTO',
+            maxZoom: 19,
+            subdomains: 'abcd',
+          }
+        ).addTo(mapInstance.current);
+        return;
+      }
+
+      baseTileLayerRef.current = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 18,
+      }).addTo(mapInstance.current);
+    } catch {
+      // ignore
+    }
+  }, [tileStyle, useInlineSvg, mapReady]);
 
   // Defensive: if the map instance already existed (e.g., HMR), enforce our options here too.
   useEffect(() => {
@@ -489,6 +588,88 @@ const MapComponent: React.FC<MapComponentProps> = ({
         mapInstance.current.removeLayer(marker);
       });
       markersRef.current = [];
+
+      // All Regions overview mode (selectedRegion === 0):
+      // Show one lightweight marker per region so the user can see where each region is,
+      // without rendering all detailed location markers.
+      if (selectedRegion === 0) {
+        const regs = Array.isArray(regions) ? regions : [];
+        for (const r of regs) {
+          try {
+            const ridRaw = (r as any)?.id;
+            const rid = Number(ridRaw);
+            if (!Number.isFinite(rid)) continue;
+
+            const locs = Array.isArray((r as any)?.locations) ? ((r as any).locations as Location[]) : [];
+            const pts: Array<[number, number]> = [];
+            for (const loc of locs) {
+              const c = (loc as any)?.coordinates;
+              const lat = Array.isArray(c) ? Number(c[0]) : NaN;
+              const lng = Array.isArray(c) ? Number(c[1]) : NaN;
+              if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+              if (lat === 0 && lng === 0) continue;
+              pts.push([lat, lng]);
+            }
+            if (pts.length === 0) continue;
+
+            const bounds = L.latLngBounds(pts);
+            const center = bounds.getCenter();
+            const label = `${rid}. Bölge`;
+
+            const icon = L.divIcon({
+              className: 'region-overview-marker',
+              html: `
+                <div style="
+                  width: 30px;
+                  height: 30px;
+                  border-radius: 9999px;
+                  background: rgba(15, 23, 42, 0.85);
+                  border: 2px solid rgba(255, 255, 255, 0.9);
+                  box-shadow: 0 10px 24px rgba(0,0,0,0.25);
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  color: #ffffff;
+                  font-weight: 800;
+                  font-size: 12px;
+                ">
+                  ${rid}
+                </div>
+              `,
+              iconSize: [30, 30],
+              iconAnchor: [15, 15],
+            });
+
+            const marker = L.marker([center.lat, center.lng], { icon, interactive: true });
+
+            // Click a region marker to switch to that region (show detailed locations)
+            marker.on('click', () => {
+              try { onRegionSelectRef.current?.(rid); } catch { /* ignore */ }
+            });
+
+            // Optional tooltip so it's obvious what it is
+            try {
+              marker.bindTooltip(label, {
+                direction: 'top',
+                offset: [0, -10],
+                opacity: 0.95,
+                sticky: true,
+              });
+            } catch {
+              // ignore
+            }
+
+            mapInstance.current.addLayer(marker);
+            markersRef.current.push(marker);
+          } catch {
+            // ignore
+          }
+        }
+
+        // In all-regions overview we intentionally do not auto-fit to markers
+        // (Turkey fit is handled on init) to avoid camera resets.
+        return;
+      }
 
       // Yeni işaretleyiciler ekle (sadece tek bir bölge seçiliyse)
       if (selectedRegion !== 0) {
@@ -1115,11 +1296,102 @@ const MapComponent: React.FC<MapComponentProps> = ({
     const node = svgRef.current;
     if (!node) return;
 
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+
+    const getSvgRoot = () => node.querySelector('svg') as SVGSVGElement | null;
+
+    const ensureSvgDefs = (svg: SVGSVGElement) => {
+      let defs = svg.querySelector('defs') as SVGDefsElement | null;
+      if (!defs) {
+        defs = document.createElementNS(SVG_NS, 'defs') as unknown as SVGDefsElement;
+        svg.insertBefore(defs, svg.firstChild);
+      }
+      return defs;
+    };
+
+    const upsertVerticalBandGradient = (
+      svg: SVGSVGElement,
+      regionId: number,
+      segments: Array<{ frac: number; color: string }>,
+    ) => {
+      const defs = ensureSvgDefs(svg);
+      const id = `mf-region-grad-${regionId}`;
+
+      // Remove any existing gradient with same id so updates are deterministic.
+      const existing = defs.querySelector(`#${CSS.escape(id)}`);
+      if (existing) existing.remove();
+
+      const grad = document.createElementNS(SVG_NS, 'linearGradient');
+      grad.setAttribute('id', id);
+      // User request: vertical bands (side-by-side), not horizontal stripes.
+      // Left -> right so segment boundaries are vertical.
+      grad.setAttribute('x1', '0');
+      grad.setAttribute('y1', '0');
+      grad.setAttribute('x2', '1');
+      grad.setAttribute('y2', '0');
+
+      const cleaned = segments
+        .map(s => ({ frac: Math.max(0, Math.min(1, Number(s.frac) || 0)), color: s.color }))
+        .filter(s => s.frac > 0 && !!s.color);
+
+      if (cleaned.length === 0) {
+        // ensure valid gradient; single transparent stop
+        const stop = document.createElementNS(SVG_NS, 'stop');
+        stop.setAttribute('offset', '0');
+        stop.setAttribute('stop-color', 'transparent');
+        grad.appendChild(stop);
+        defs.appendChild(grad);
+        return `url(#${id})`;
+      }
+
+      // Normalize so we end exactly at 1.0
+      const sum = cleaned.reduce((acc, s) => acc + s.frac, 0);
+      const normalized = sum > 0 ? cleaned.map(s => ({ ...s, frac: s.frac / sum })) : cleaned;
+
+      let offset = 0;
+      const addStop = (o: number, color: string) => {
+        const stop = document.createElementNS(SVG_NS, 'stop');
+        stop.setAttribute('offset', `${Math.max(0, Math.min(1, o))}`);
+        stop.setAttribute('stop-color', color);
+        grad.appendChild(stop);
+      };
+
+      // Hard edges: two stops at each boundary.
+      // Top -> bottom order.
+      for (let i = 0; i < normalized.length; i++) {
+        const seg = normalized[i];
+        const start = offset;
+        const end = Math.min(1, offset + seg.frac);
+        if (i === 0) addStop(start, seg.color);
+        addStop(end, seg.color);
+        const next = normalized[i + 1];
+        if (next && end < 1) addStop(end, next.color);
+        offset = end;
+      }
+
+      // Ensure we always end with a stop at 1.
+      if (offset < 1) {
+        const lastColor = normalized[normalized.length - 1].color;
+        addStop(1, lastColor);
+      }
+
+      defs.appendChild(grad);
+      return `url(#${id})`;
+    };
+
+    const normalizeDirectorateField = (value: unknown) => String(value ?? '').trim().toUpperCase();
+    const isDirectorateLocation = (loc: any) =>
+      normalizeDirectorateField(loc?.brand) === 'BÖLGE' &&
+      normalizeDirectorateField(loc?.model) === 'MÜDÜRLÜK';
+
+    const getMetricLocations = (locs: any[]) => (locs || []).filter(l => !isDirectorateLocation(l));
+
     const getRegionCounts = (locs: any[]) => {
-      const total = locs.length;
-      const accepted = locs.filter((l: any) => l?.details && l.details.isAccepted).length;
-      const installed = locs.filter((l: any) => l?.details && !l.details.isAccepted && l.details.isInstalled).length;
-      const started = locs.filter((l: any) => l?.details && !l.details.isAccepted && !l.details.isInstalled && l.details.isConfigured).length;
+      const metricLocs = getMetricLocations(locs);
+      const total = metricLocs.length;
+      const accepted = metricLocs.filter((l: any) => l?.details && l.details.isAccepted).length;
+      const installed = metricLocs.filter((l: any) => l?.details && !l.details.isAccepted && l.details.isInstalled).length;
+      const started = metricLocs.filter((l: any) => l?.details && !l.details.isAccepted && !l.details.isInstalled && l.details.isConfigured).length;
       const untouched = Math.max(0, total - accepted - installed - started);
       return { total, accepted, installed, started, untouched };
     };
@@ -1211,9 +1483,10 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
         const regionObj = regions?.find(r => r.id === regionId);
         const regionLocs = (regionObj?.locations || []) as any[];
-        const counts = getRegionCounts(regionLocs);
-        const locations = regionLocs as Location[];
-        const accepted = regionLocs.filter((l: any) => l?.details && l.details.isAccepted) as Location[];
+        const metricLocs = getMetricLocations(regionLocs);
+        const counts = getRegionCounts(metricLocs);
+        const locations = metricLocs as Location[];
+        const accepted = metricLocs.filter((l: any) => l?.details && l.details.isAccepted) as Location[];
         const safePct = (n: number) => (counts.total ? Math.round((n / counts.total) * 100) : 0);
         const perc = {
           accepted: safePct(counts.accepted),
@@ -1246,9 +1519,10 @@ const MapComponent: React.FC<MapComponentProps> = ({
       }
 
       const regionAttr = target.getAttribute('data-region') || target.dataset.region;
-      // Bölge istatistiklerine göre fareyle üzerine gelme rengini hesaplayın ve uygulayın (yapılandırılmış / etkin)
-      // Kısıtlı modda, istatistiğe göre renk değiştirmeyip sadece mevcut yeşil tonu koruyoruz.
-      if (!viewRestricted) {
+      // Bölge istatistiklerine göre fareyle üzerine gelme rengini hesaplayın ve uygulayın.
+      // Kullanıcı isteği: 2 (Türkiye paleti) ve 3 (dikey yüzde bant) görünümlerinde hover, rengi değiştirmesin.
+      // Kısıtlı modda da istatistiğe göre renk değiştirmeyip sadece mevcut yeşil tonu koruyoruz.
+      if (!viewRestricted && regionViewLevel === 1) {
         try {
           if (regionAttr && regions) {
             const regionId = Number(regionAttr);
@@ -1349,6 +1623,20 @@ const MapComponent: React.FC<MapComponentProps> = ({
     const applyDefaultRegionColors = (els: HTMLElement[]) => {
       // Apply region colors based on dominant status rule.
       try {
+        const svgRoot = getSvgRoot();
+
+        // IMPORTANT: The base Turkey palette is defined via CSS classes (st1..st22).
+        // If those rules are always active, they override our computed `fill` attributes
+        // for level 1/3. So we only enable them when `regionViewLevel === 2`.
+        try {
+          if (svgRoot) {
+            const enableBasePalette = !viewRestricted && regionViewLevel === 2;
+            svgRoot.classList.toggle('mf-level2', enableBasePalette);
+          }
+        } catch {
+          // ignore
+        }
+
         els.forEach(el => {
           const regionAttr = el.getAttribute('data-region') || el.dataset.region;
           if (!regionAttr || !regions) return;
@@ -1373,6 +1661,22 @@ const MapComponent: React.FC<MapComponentProps> = ({
             return;
           }
 
+          // Level 2: restore original SVG palette (remove computed attributes)
+          if (regionViewLevel === 2) {
+            delete el.dataset.computedFill;
+            delete el.dataset.computedStroke;
+
+            // revert to base attributes if they were real attrs, otherwise let CSS classes handle it
+            const bf = el.dataset.baseFill || '';
+            const bs = el.dataset.baseStroke || '';
+            if (bf) el.setAttribute('fill', bf);
+            else el.removeAttribute('fill');
+            if (bs) el.setAttribute('stroke', bs);
+            else el.removeAttribute('stroke');
+            (el as HTMLElement).style.opacity = '0.95';
+            return;
+          }
+
           const counts = getRegionCounts(regionObj.locations as any[]);
           const pure = getPureRegionColors(counts);
 
@@ -1390,6 +1694,37 @@ const MapComponent: React.FC<MapComponentProps> = ({
             return;
           }
 
+          // Level 3: show vertical percentage distribution (accepted/installed/started/untouched)
+          if (regionViewLevel === 3) {
+            const total = counts.total || 0;
+            const segments = total
+              ? [
+                  { frac: counts.accepted / total, color: '#22c55e' },
+                  { frac: counts.installed / total, color: '#3b82f6' },
+                  { frac: counts.started / total, color: '#f59e0b' },
+                  { frac: counts.untouched / total, color: '#92400e' },
+                ]
+              : [];
+
+            try {
+              const multi = segments.filter(s => s.frac > 0).length > 1;
+              const fillValue = multi && svgRoot
+                ? upsertVerticalBandGradient(svgRoot, regionId, segments)
+                : pure.fill;
+
+              el.dataset.computedFill = fillValue;
+              delete el.dataset.computedStroke;
+              el.setAttribute('fill', fillValue);
+              // keep stroke from CSS/base palette to avoid misleading "dominant" border
+              el.removeAttribute('stroke');
+              (el as HTMLElement).style.opacity = '0.95';
+            } catch (e) {
+              console.debug('MapComponent: svg level 3 applyAttributes error', e);
+            }
+            return;
+          }
+
+          // Level 1: current behavior (dominant status)
           el.dataset.computedFill = pure.fill;
           el.dataset.computedStroke = pure.stroke;
           try {
@@ -1437,7 +1772,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
       mo.disconnect();
       labelEl.remove();
     };
-  }, [onRegionSelect, regions, viewRestricted, activeWorkRegionIds]);
+  }, [onRegionSelect, regions, viewRestricted, activeWorkRegionIds, regionViewLevel]);
 
   // Highlight selected region on the inline SVG by adding a class .svg-region--selected
   useEffect(() => {
@@ -1649,7 +1984,31 @@ const MapComponent: React.FC<MapComponentProps> = ({
 .svg-region--selected { filter: drop-shadow(0 10px 30px rgba(0,0,0,0.35)) saturate(140%); opacity: 1; stroke: rgba(0,0,0,0.18); stroke-width: 1.8px; }
 @keyframes workPulse { 0%, 100% { filter: drop-shadow(0 0 0 rgba(34,197,94,0)); stroke: rgba(34,197,94,0.35); stroke-width: 2.2px; } 50% { filter: drop-shadow(0 0 18px rgba(34,197,94,0.95)); stroke: #22c55e; stroke-width: 4px; } }
 .svg-region--active-work { animation: workPulse 1.1s ease-in-out infinite; }
-.region-label { position: absolute; pointer-events: none; background: rgba(255, 255, 255, 0.96); padding:6px 10px; border-radius:8px; font-weight:700; font-size:12px; box-shadow:0 6px 18px rgba(255, 255, 255, 1); }`}</style>
+.region-label { position: absolute; pointer-events: none; background: rgba(255, 255, 255, 0.96); padding:6px 10px; border-radius:8px; font-weight:700; font-size:12px; box-shadow:0 6px 18px rgba(255, 255, 255, 1); }
+/* Base Turkey palette (used by Level 2) */
+.mf-level2 .svg-region { stroke: rgba(255, 255, 255, 0.55); stroke-width: 0.7px; }
+.mf-level2 .st1 { fill: #90CAF9; }
+.mf-level2 .st2 { fill: #3F51B5; }
+.mf-level2 .st3 { fill: #313F9F; }
+.mf-level2 .st4 { fill: #90CAF9; }
+.mf-level2 .st5 { fill: #4FC3F7; }
+.mf-level2 .st6 { fill: #06A9F4; }
+.mf-level2 .st7 { fill: #0088D1; }
+.mf-level2 .st8 { fill: #26C6DA; }
+.mf-level2 .st9 { fill: #01ACC1; }
+.mf-level2 .st10 { fill: #4CB6AC; }
+.mf-level2 .st11 { fill: #009588; }
+.mf-level2 .st12 { fill: #004C41; }
+.mf-level2 .st13 { fill: #00796B; }
+.mf-level2 .st14 { fill: #8ABF4C; }
+.mf-level2 .st15 { fill: #689F38; }
+.mf-level2 .st16 { fill: #33691D; }
+.mf-level2 .st17 { fill: #558A2E; }
+.mf-level2 .st18 { fill: #006064; }
+.mf-level2 .st19 { fill: #00579B; }
+.mf-level2 .st20 { fill: #7986CB; }
+.mf-level2 .st21 { fill: #1A237E; }
+.mf-level2 .st22 { fill: #80DEEA; }`}</style>
           </defs>
           <path id="1-bolge-mudurlugu-istanbulavrupa" /*</svg>fill='#90CAF9'*/ data-region="1" className='svg-region st1' d="M179.4,60.9l-1.5-0.6l-1.3-0.2l-0.7,0.2l-0.3,0.7h-0.3l-0.5-0.4  l-5.2-1.1l-16.1-7.7l-11.1-4.9l-7.8-5l-1.9-1.8l-2.5,3.6h-0.4l1.5,5.3l0.6,4.5l-1.6,5.7l-0.7,4.3l0.7,5.4l0.6,4l0.6,0.5l1.1-0.1  l1.9-0.4l0.2,0.1l0.6,0.7l0.6,0.1h1.7l1.7,0.3l3.7,1.4l1.6,0.3l1.2,0.6l2.8,2.9l1.8,0.2l1-0.9l0.3-1.1l0.1-0.6l1,0.3l0.4,0.5  l-0.5,2.3l2,0.7l6.3-0.8l1.2,0.1l0.4,0.4l0.4,0.5l0.8,0.3l1.4,0.1l0.7-0.2l0.9-0.7l0.4-0.2l2.1-0.5l1-0.6l0.7-0.2l0.6-0.7l0.3-0.1  l0.4,0.3l1.3,0.1l0.9-0.6l-0.3-1.4l0.1-0.2l0.3-0.5l0.3-0.2l0.9-0.3l0.6-0.6l0.5-0.8l0.5-1.1l0.4-1.3l0.2-1.3l0.5-1l-0.4-0.4  l-1.1-1.5l0.3-0.1l1-0.6l1-1.2l0.7-1.3l0.5-2.1L179.4,60.9z M151.9,75.6l-0.4-1.2l-1.1-1.2l-0.1-0.3l0.6,0.1l1,0.8l0.4,1.2l-0.3,1.1  L151.9,75.6z"></path>
           <path id="2-bolge-mudurlugu-bursa" /*fill='#3F51B5'*/ data-region="2" className="svg-region st2" d="M223.5,108.4l-0.4-1.8l-7.4-2.7l-3.7,0.7l-9.6,3.6l-3,0.2l-2.5-0.8l0.4-2.4v-6.7l-0.9,0.4l-0.3-0.2l-0.4-0.7  l-0.6-0.5l-0.6,0.1l-1.2,0.9l-2,1.1l-2.2,0.8l-15.3,1.4l-1,0.5l-2.2,2.3l-1.5,0.9l-3.8,1.5l-1.9,1.2l-0.8,1.9l-0.3,0.8l3.2,0.7  l4.5,2.9l3,0.7h0.1v0.1l0.6-0.4h0.2v-0.1l1.3-1h2.7l1.1,0.2l1.1,0.8l1.1,1.1l0.7,0.7l-0.3,0.1l-0.8,0.3l-0.8,0.1l-1-0.4l-0.5,1.2  l-0.4,1.7l-0.4,0.9L177,121l-0.7,0.1l-3.9,0.1l-0.9-0.2l-0.8-0.2l-1.4-0.8l-0.7-0.4l-1.6-0.3l-1.4-0.1l-1.9-0.6l-1.1-0.1l-0.9,0.5  l-0.8,0.6l-2.9,0.5l-0.5,0.3l-0.5,0.5l-0.3,0.1l-0.8-0.5l-0.3,0.4l-2.2-1l-2.5-0.6h-2.4l-1.5,0.6v-0.2l3.6-1l-7.2,0.1l-2.8-0.4  l-7.3,0.3l-5,0.2l-4.5,1.7l-4.3,0.4l-1.6-0.5l-0.1-1.2l1.2-1.1l4.6-2.3l1.1-1.9l-1.3-1.5l-2.5-0.9l-8.7-1.4l-0.7,0.3l-0.2,0.2  l-0.2-0.1l-1.2-1.5l-0.6,0.9l-0.8-0.3l-0.8,0.4l-0.8,1l-0.5,0.4l-0.8,0.2v0.9l0.5,0.8l1.7,1.7l0.5,0.2l0.8,0.1l0.1,0.3l0.1,1.1  l0.7,1.1l0.5,0.3l0.5,0.3l0.3,1.4h0.7l0.8-0.4l2.5,0.9h0.3l-0.4,0.5l-2.7,1.5l-1.2,1.8l-1.3,0.3l-1.4-0.2l-1.2-0.5l-1.3,0.8  l-0.9-0.2l-1.4-0.7l-1.6-0.3l-0.9,0.2l-1,0.6l-0.4,0.3l-0.2,0.1v0.1l-0.3,0.1l-0.4,0.1h-1.3l-3.6-0.8l-3.1-1.4l-2.8-1.9l-1.9-2  l0.4,0.2l1.2-0.8l-1-2.4l-0.5-1.1l-1.1-0.7h-1l-1.8,1.2l-1,0.2l-1.9-0.1l-1.9-0.3l-2.5,0.1l-1.8,1.5l-1.2,1.5l-1.4,1.1l-1,0.2  l-2.8-0.2l-1.4-0.8l-0.7-0.2l-1.8,0.5l-4.5-0.4l-2.2,0.1l-1.3,1.1l-5.5,6.8l-0.6,0.5l-1.2,0.5l-0.5,0.3l-2.4,3.1l-0.8,0.9l-1.7,0.3  l-1.3,0.7l-1.9,0.2l0,0l-0.8,1.8l0.4,1.1v1.1l-0.2,1.3l-0.2,0.6l-0.3,0.2l-1.1,0.2l0.1,0.8l-0.2,0.6l-0.1,0.9l-0.1,0.5l-0.4,0.6  l-2.1,2.3l-2.3,1.1l-0.7,0.4l-2.8-0.9l-0.7,0.6l-1.1,2l-0.4,1.3l-0.4,0.8l-0.2,0.8v0.7l0.3,1.7l-0.6,3.3l-0.5,1.1l0.4,0.1l-2.3,0.4  v-0.6l-0.5-1l-1,0.5l-0.2-0.2l-1-0.3h-1.9l-1.1,0.3l-0.6,0.9l0.4,1l0.8,0.6l1.5,0.8l1.7,1.1l1.4,0.2l0.4-1.4l0.1-1.8l2.4-0.4  l0.5,0.1v0.3l-0.2,1.8v1.5l-0.1,0.3l-0.6,0.4v0.9l0.2,0.9l1,1.9l0.2,0.6l-0.4,3.6l-0.3,1.5l-2,1.9l-0.9,3.5l-1.3,3.6l0.3,1.7  l2.1,1.1l0.2,0.1h2.2l3.9-1l1.2,0.7l0.8-1.3l0.4-0.1l0.7-0.2l0.5-0.1l2.7,0.5h0.7l0.5-0.4l2.2-1.2h0.7l0.5-0.7l1.1-0.4l10.9-2  l7.2-1.3l1.4,0.9l1.1-0.5l1-1l1.1-0.4l1.3,0.2l0.6,0.4l0.3,0.7v1.3l-0.7,2.6l-0.1,0.8l-2.9,0.9l-1.2,0.9l0.5,1l-0.3,0.3l-0.6,0.2  l-2.2,0.1l0.1,1l-0.1,1.5l0.4,0.2l-5,4l-1,1.4l-1.1,0.6l-0.3,0.6l0.2-0.9l-0.8-0.5l-1.1,0.3l-0.4,0.8l-0.3,1.4l-0.8,0.8l1.5,0.7  l1.4,0.1l2.4-0.2l0.7,0.4l0.3,0.8l0.3,1.3l0.4,1.3l-0.1,0.8l0.9,1l1.1,0.8l0.6,0.3l11.5-8.2l1-1.2l0.9-1.6l1-1.3l1.3-0.8l1.7-0.7  l9.4-6.1l2.6,0.5l2.2,2l1.6,3.3l4.2-2.2l2.2,1.1l2.2,1.8l3.9,1.2l3.7-0.5l2,0.1l2,1l1,0.2l1.7-0.3l0.6-0.1l1.1,1.8l-1.5,2.6  l-0.7,2.7l2.5,1.2l3.9-1.4l0.5,0.3l0.4,0.8l4.3,4.8l2.6,6.1l2.7,1l2.3-1l2.3-0.4l2-1.3l1.4-1.9l2-0.3l2.2,0.2l2.1-0.2l2-0.6  l4.7-2.4l4.7,0.7l0.5-1l-0.1-1.8l-0.3-0.8l0.4-2l1.8-0.9l3.8-1.3l1.8-1.3l1.7-3.1l0.4-0.9l1.2-1.5l1.2-2l0.8-4.9l0.6-1.8l0.6-0.5  l0.5-1.1v-1.3l0.2-1.2l0.8-1.6l1.7,1.3l2.4,0.6l3.8,0.5l3.8-0.1l3.2-2l0.3-4.6l1-3l2.4-1.8l1.5-5.4l1-1l0.7-1.8l1-3.9l2.4-1.7  l5.3,2.1l1.7,0.3l1.8-0.3l1.5-0.7l1.5-0.2l2.9,0.6l3-1.2l-0.8-3.8l-1.4-1.2l-2.6-3.7l-0.1-3.2l1.4-6.8l5-5.2l1-2.1l-0.2-2l-1.2-1.5  l-0.2-2l0.6-1.6l0.6-2l0.2-2.1l0.9-1.8l0.9-1l1.1-0.9l3.1-1.6L223.5,108.4z M52.4,193.9l-0.2-0.1l0.3-0.1L52.4,193.9z"></path>
