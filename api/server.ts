@@ -40,6 +40,58 @@ const app = Fastify({
   bodyLimit: 1_000_000,
 });
 
+const locationResponseSelect = {
+  id: true,
+  region_id: true,
+  name: true,
+  center: true,
+  latitude: true,
+  longitude: true,
+  address: true,
+  note: true,
+  brand: true,
+  model: true,
+  has_gps: true,
+  has_rtu: true,
+  has_panos: true,
+  is_installed: true,
+  has_card_access: true,
+  is_installed_card_access: true,
+  is_active_card_access: true,
+  is_two_door_card_access: true,
+  is_active: true,
+  is_configured: true,
+  is_accepted: true,
+  security_firewall: true,
+  network_switch: true,
+  rtu_count: true,
+  gps_card_antenna: true,
+  rtu_panel: true,
+  btp_panel: true,
+  energy_analyzer: true,
+  ykgc_count: true,
+  teias_rtu_installation: true,
+  indoor_dome_camera: true,
+  network_video_management: true,
+  smart_control_unit: true,
+  card_reader: true,
+  network_recording_unit: true,
+  access_control_system: true,
+  transformer_center_type: true,
+  created_at: true,
+  updated_at: true,
+} as const;
+
+function stripUnsupportedLocationFields(input: any): any {
+  if (!input || typeof input !== 'object') return input;
+  const out: any = Array.isArray(input) ? [...input] : { ...input };
+  // Legacy DB: these fields should not be required.
+  // Also protects against older builds sending them.
+  delete out.project_id;
+  delete out.organization_id;
+  return out;
+}
+
 class HttpError extends Error {
   statusCode: number;
   constructor(statusCode: number, message: string) {
@@ -427,15 +479,16 @@ app.get('/locations', async (req: FastifyRequest, reply: FastifyReply) => {
   requireAuth(req, reply);
   const q = (req.query ?? {}) as any;
   const regionId = q.region_id != null ? Number(q.region_id) : null;
-  const projectId = q.project_id != null ? String(q.project_id) : null;
 
   const where: any = {};
   if (Number.isFinite(regionId) && regionId! > 0) where.region_id = regionId;
-  if (projectId && projectId.trim()) where.project_id = projectId.trim();
 
   const rows = await prisma.location.findMany({
     where,
     orderBy: [{ region_id: 'asc' }, { name: 'asc' }],
+    // Explicit select so older DBs missing optional columns don't 500.
+    // (Client does not depend on project_id/organization_id in responses.)
+    select: locationResponseSelect,
   });
 
   return reply.send({ data: rows });
@@ -445,7 +498,10 @@ app.get('/locations/:id', async (req: FastifyRequest, reply: FastifyReply) => {
   requireAuth(req, reply);
   const id = String((req.params as any)?.id ?? '').trim();
   if (!id) return reply.code(400).send({ error: 'id is required' });
-  const row = await prisma.location.findUnique({ where: { id } });
+  const row = await prisma.location.findUnique({
+    where: { id },
+    select: locationResponseSelect,
+  });
   if (!row) return reply.code(404).send({ error: 'Lokasyon bulunamadı' });
   return reply.send({ data: row });
 });
@@ -532,7 +588,7 @@ app.get('/work-entries', async (req: FastifyRequest, reply: FastifyReply) => {
 app.post('/locations/seed-if-empty', async (req: FastifyRequest, reply: FastifyReply) => {
   requireAuth(req, reply);
   const body = (req.body ?? {}) as any;
-  const rows = Array.isArray(body.rows) ? body.rows : [];
+  const rows = Array.isArray(body.rows) ? body.rows.map((r: any) => stripUnsupportedLocationFields(r)) : [];
   if (rows.length === 0) return reply.send({ inserted: 0 });
 
   const count = await prisma.location.count();
@@ -545,9 +601,9 @@ app.post('/locations/seed-if-empty', async (req: FastifyRequest, reply: FastifyR
 app.put('/locations/:id', async (req: FastifyRequest, reply: FastifyReply) => {
   requireAuth(req, reply);
   const id = String((req.params as any)?.id ?? '').trim();
-  const body = (req.body ?? {}) as any;
+  const body = stripUnsupportedLocationFields((req.body ?? {}) as any);
   try {
-    const updated = await prisma.location.update({ where: { id }, data: body });
+    const updated = await prisma.location.update({ where: { id }, data: body, select: locationResponseSelect });
     return reply.send({ success: true, data: updated });
   } catch {
     return reply.code(404).send({ error: 'Lokasyon bulunamadı' });
@@ -556,10 +612,10 @@ app.put('/locations/:id', async (req: FastifyRequest, reply: FastifyReply) => {
 
 app.post('/locations', async (req: FastifyRequest, reply: FastifyReply) => {
   requireAuth(req, reply);
-  const body = (req.body ?? {}) as any;
+  const body = stripUnsupportedLocationFields((req.body ?? {}) as any);
   if (!body?.id) return reply.code(400).send({ error: 'id is required' });
   try {
-    const created = await prisma.location.create({ data: body });
+    const created = await prisma.location.create({ data: body, select: locationResponseSelect });
     return reply.send({ success: true, data: created });
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message ?? 'Lokasyon oluşturulamadı' });

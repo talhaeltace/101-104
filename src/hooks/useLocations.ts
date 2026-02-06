@@ -15,31 +15,12 @@ export const useLocations = (opts?: { enabled?: boolean }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const parseProjectId = useCallback((raw: unknown): string | number | undefined => {
-    if (raw === null || raw === undefined) return undefined;
-    const value = String(raw).trim();
-    if (!value) return undefined;
-    if (/^\d+$/.test(value)) return Number(value);
-    return value;
-  }, []);
-
-  const getEnvProjectId = useCallback((): string | number | undefined => {
-    try {
-      // Optional: allow deployments where DB enforces locations.project_id NOT NULL
-      return parseProjectId((import.meta as any)?.env?.VITE_PROJECT_ID);
-    } catch {
-      return undefined;
-    }
-  }, [parseProjectId]);
-
   // Varsayılan verileri veritabanına kaydet
   const initializeDatabase = useCallback(async () => {
     try {
-      const envProjectId = getEnvProjectId();
       const locationsToInsert = regions.flatMap(region =>
         region.locations.map(location => ({
           id: location.id,
-          ...(envProjectId !== undefined ? { project_id: envProjectId } : {}),
           region_id: region.id,
           name: location.name,
           center: location.center,
@@ -86,7 +67,7 @@ export const useLocations = (opts?: { enabled?: boolean }) => {
     } catch (err) {
       console.error('Beklenmeyen veritabanı başlatma hatası:', err);
     }
-  }, [getEnvProjectId]);
+  }, []);
 
   // Veritabanından verileri yükle
   const loadLocations = useCallback(async () => {
@@ -106,8 +87,7 @@ export const useLocations = (opts?: { enabled?: boolean }) => {
         return;
       }
 
-      const envProjectId = getEnvProjectId();
-      const data = await fetchLocationRows({ projectId: envProjectId });
+      const data = await fetchLocationRows();
 
       if (data && data.length > 0) {
         const groupedData = data.reduce((acc: any, item: any) => {
@@ -177,7 +157,7 @@ export const useLocations = (opts?: { enabled?: boolean }) => {
     } finally {
       setLoading(false);
     }
-  }, [enabled, getEnvProjectId, initializeDatabase]);
+  }, [enabled, initializeDatabase]);
 
   // Lokasyon güncelle
   const updateLocation = async (updatedLocation: Location) => {
@@ -271,7 +251,6 @@ export const useLocations = (opts?: { enabled?: boolean }) => {
 
       const insertObj: any = {
         id: baseId,
-        ...(getEnvProjectId() !== undefined ? { project_id: String(getEnvProjectId()) } : {}),
         region_id: regionId,
         name: newLocation.name,
         center: newLocation.center,

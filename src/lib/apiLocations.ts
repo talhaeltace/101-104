@@ -3,13 +3,9 @@ import { apiFetch } from './apiClient';
 export type LocationRow = Record<string, any>;
 
 export async function fetchLocationRows(params?: {
-  projectId?: string | number;
   regionId?: number;
 }): Promise<LocationRow[]> {
   const qs = new URLSearchParams();
-  if (params?.projectId !== undefined && params?.projectId !== null && String(params.projectId).trim()) {
-    qs.set('project_id', String(params.projectId));
-  }
   if (params?.regionId !== undefined && params?.regionId !== null && Number.isFinite(params.regionId)) {
     qs.set('region_id', String(params.regionId));
   }

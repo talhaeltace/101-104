@@ -51,8 +51,6 @@ model LoginOtpChallenge {
 
 model Location {
   id          String   @id @db.VarChar(64)
-  project_id  String?  @db.VarChar(64)
-  organization_id String? @db.Char(36)
   region_id   Int
   name        String   @db.VarChar(255)
   center      String?  @db.VarChar(255)
@@ -94,13 +92,10 @@ model Location {
   access_control_system    Int @default(0)
   transformer_center_type  String? @db.VarChar(255)
 
-  is_global Boolean @default(false)
-
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@index([region_id])
-  @@index([project_id])
 }
 
 model Task {
