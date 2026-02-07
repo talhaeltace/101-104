@@ -121,6 +121,25 @@ const formatTime = (isoString: string) => {
   return new Date(isoString).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 };
 
+const formatDateTime = (isoString: string) => {
+  try {
+    return new Date(isoString).toLocaleString('tr-TR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return isoString;
+  }
+};
+
+const formatCoord = (v: number | null) => {
+  if (v == null || Number.isNaN(Number(v))) return null;
+  return Number(v).toFixed(5);
+};
+
 type FilterType = 'all' | 'active' | 'idle';
 
 const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUserId, currentUsername, regions }) => {
@@ -129,7 +148,9 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [expandedMemberId, setExpandedMemberId] = useState<string | null>(null);
+  // IMPORTANT: Use a stable unique key (user_id) to avoid “open one, all open”
+  // issues when backend row `id` is missing/duplicated.
+  const [expandedMemberKey, setExpandedMemberKey] = useState<string | null>(null);
   
   useBodyScrollLock(isOpen);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -436,14 +457,19 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
                 const config = statusConfig[member.status] || statusConfig.idle;
                 const StatusIcon = config.icon;
                 const isActive = member.status !== 'idle';
-                const isExpanded = expandedMemberId === member.id;
+                const memberKey = String(member.user_id || member.id || member.username);
+                const isExpanded = expandedMemberKey === memberKey;
                 const currentTask = memberCurrentTask[member.user_id] ?? null;
                 const completedLocations = member.completed_locations || [];
                 const currentDuration = formatLiveDuration(member.current_leg_start_time);
+                const hasCoords = member.current_lat != null && member.current_lng != null;
+                const latText = formatCoord(member.current_lat);
+                const lngText = formatCoord(member.current_lng);
+                const primaryPlace = member.current_location_name || member.next_location_name || null;
 
                 return (
                   <div 
-                    key={member.id} 
+                    key={memberKey} 
                     className={`rounded-xl sm:rounded-2xl border transition-all duration-200 overflow-hidden shadow-sm hover:shadow-md ${
                       isActive 
                         ? `bg-white ${config.borderColor}` 
@@ -453,7 +479,7 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
                     {/* Member Card Header */}
                     <div 
                       className="p-2.5 sm:p-4 cursor-pointer"
-                      onClick={() => setExpandedMemberId(isExpanded ? null : member.id)}
+                      onClick={() => setExpandedMemberKey(isExpanded ? null : memberKey)}
                     >
                       <div className="flex items-start gap-2 sm:gap-3">
                         {/* Avatar */}
@@ -499,11 +525,11 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
 
                         {/* Actions */}
                         <div className="shrink-0 flex items-center gap-1 sm:gap-2">
-                          {isActive && member.current_lat && member.current_lng && onFocusMember && (
+                          {isActive && hasCoords && onFocusMember && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                onFocusMember(member.id, member.username, member.current_lat!, member.current_lng!);
+                                onFocusMember(member.user_id, member.username, member.current_lat!, member.current_lng!);
                                 onClose();
                               }}
                               className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-cyan-50 text-cyan-600 hover:bg-cyan-100 transition-colors"
@@ -517,12 +543,12 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
                       </div>
 
                       {/* Active Status Card */}
-                      {isActive && member.current_location_name && (
+                      {isActive && (
                         <div className={`mt-2 sm:mt-3 p-2 sm:p-3 rounded-lg sm:rounded-xl ${config.bgColor} border ${config.borderColor}`}>
                           <div className="flex items-center gap-1.5 sm:gap-2 mb-0.5 sm:mb-1">
                             <StatusIcon className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${config.color}`} />
                             <span className={`text-[10px] sm:text-xs font-semibold uppercase ${config.color}`}>
-                              {member.status === 'yolda' ? 'Yolda' : 'Çalışıyor'}
+                              {member.status === 'yolda' ? 'Yolda' : member.status === 'adreste' ? 'Adreste' : 'Aktif'}
                             </span>
                             {currentDuration && (
                               <span className={`ml-auto text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full font-bold ${config.bgColor} ${config.color}`}>
@@ -530,8 +556,30 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
                               </span>
                             )}
                           </div>
-                          <div className="text-xs sm:text-sm font-semibold text-gray-800 truncate">{member.current_location_name}</div>
-                          {member.next_location_name && (
+
+                          <div className="text-xs sm:text-sm font-semibold text-gray-800 truncate">
+                            {primaryPlace ?? 'Konum bilgisi yok'}
+                          </div>
+
+                          <div className="mt-0.5 sm:mt-1 flex flex-wrap items-center gap-x-2 sm:gap-x-3 gap-y-0.5 text-[10px] sm:text-xs text-gray-600">
+                            <span className="flex items-center gap-0.5 sm:gap-1">
+                              <Clock className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                              {formatTime(member.last_updated_at)}
+                            </span>
+                            {hasCoords ? (
+                              <span className="flex items-center gap-0.5 sm:gap-1">
+                                <Navigation className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                                {latText},{lngText}
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-0.5 sm:gap-1 text-gray-500">
+                                <Navigation className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                                GPS yok
+                              </span>
+                            )}
+                          </div>
+
+                          {member.next_location_name && member.next_location_name !== member.current_location_name && (
                             <div className="flex items-center gap-0.5 sm:gap-1 mt-0.5 sm:mt-1 text-[10px] sm:text-xs text-gray-500">
                               <ChevronRight className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
                               <span className="truncate">Sonra: {member.next_location_name}</span>
@@ -581,10 +629,10 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
                                 Görev Ata
                               </button>
                             )}
-                            {isActive && member.current_lat && member.current_lng && onFocusMember && (
+                            {isActive && hasCoords && onFocusMember && (
                               <button
                                 onClick={() => {
-                                  onFocusMember(member.id, member.username, member.current_lat!, member.current_lng!);
+                                  onFocusMember(member.user_id, member.username, member.current_lat!, member.current_lng!);
                                   onClose();
                                 }}
                                 className="px-3 sm:px-4 py-2 sm:py-2.5 bg-cyan-50 text-cyan-600 rounded-lg sm:rounded-xl text-xs sm:text-sm font-semibold hover:bg-cyan-100 flex items-center justify-center gap-1.5 sm:gap-2 border border-cyan-200"
@@ -594,6 +642,43 @@ const TeamPanel: React.FC<Props> = ({ isOpen, onClose, onFocusMember, currentUse
                               </button>
                             )}
                           </div>
+
+                          {/* Location Details */}
+                          {isActive && (
+                            <div className="bg-gray-50 rounded-lg sm:rounded-xl overflow-hidden border border-gray-200">
+                              <div className="px-2.5 sm:px-3 py-1.5 sm:py-2 border-b border-gray-200 flex items-center justify-between">
+                                <span className="text-xs sm:text-sm font-medium text-gray-800 flex items-center gap-1.5 sm:gap-2">
+                                  <Navigation className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-cyan-600" />
+                                  Konum
+                                </span>
+                                <span className="text-[10px] sm:text-xs text-gray-500">{formatDateTime(member.last_updated_at)}</span>
+                              </div>
+                              <div className="p-2.5 sm:p-3 space-y-1.5 sm:space-y-2">
+                                <div className="text-xs sm:text-sm">
+                                  <div className="text-[10px] sm:text-xs text-gray-500">Şu an</div>
+                                  <div className="font-semibold text-gray-800 break-words">
+                                    {member.current_location_name || '—'}
+                                  </div>
+                                </div>
+                                <div className="text-xs sm:text-sm">
+                                  <div className="text-[10px] sm:text-xs text-gray-500">Sonraki</div>
+                                  <div className="font-semibold text-gray-800 break-words">
+                                    {member.next_location_name || '—'}
+                                  </div>
+                                </div>
+                                <div className="text-[10px] sm:text-xs text-gray-600 flex flex-wrap gap-x-3 gap-y-1">
+                                  <span className="flex items-center gap-1">
+                                    <Clock className="w-3 h-3" />
+                                    {formatTimeAgo(member.last_updated_at)}
+                                  </span>
+                                  <span className="flex items-center gap-1">
+                                    <Navigation className="w-3 h-3" />
+                                    {hasCoords ? `${latText}, ${lngText}` : 'GPS yok'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
 
                           {/* Route Start Time */}
                           {member.route_started_at && (

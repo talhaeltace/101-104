@@ -7,9 +7,9 @@ import { apiFetch } from '../lib/apiClient';
 // Current app version - UPDATE THIS WHEN YOU RELEASE NEW VERSION
 // Android: versionName 2.1.16 (versionCode 36)
 // iOS: MARKETING_VERSION 2.1.16 (build 48)
-const CURRENT_VERSION_NAME = '2.1.17';
-const CURRENT_ANDROID_VERSION_CODE = 51;                                                                                                                                                   
-const CURRENT_IOS_BUILD = 51;
+const CURRENT_VERSION_NAME = '2.1.20';
+const CURRENT_ANDROID_VERSION_CODE = 53;                                                                                                                                                   
+const CURRENT_IOS_BUILD = 53;
 
 // Default store URLs (fallback when server row has no store_url yet)
 const DEFAULT_ANDROID_STORE_URL =
